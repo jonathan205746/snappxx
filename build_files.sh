@@ -1,7 +1,12 @@
 #!/bin/bash
 
+echo "=== Setting up Virtual Environment ==="
+python3.12 -m venv venv
+source venv/bin/activate
+
 echo "=== Installing dependencies ==="
-python3.12 -m pip install -r requirements.txt --break-system-packages
+pip install --upgrade pip
+pip install -r requirements.txt
 
 echo "=== Running collectstatic ==="
 python3.12 manage.py collectstatic --noinput --verbosity=0
