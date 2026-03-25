@@ -20,3 +20,4 @@ phonenumbers==8.13.29
 requests==2.32.3
 django-qstash==0.0.3
 dj-database-url==2.3.0
+django-ratelimit==4.1.0
