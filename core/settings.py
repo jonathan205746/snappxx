@@ -49,8 +49,21 @@ INSTALLED_APPS = [
 
 INSTALLED_APPS += ['django_qstash']
 
+# These must be present for django-qstash
 QSTASH_TOKEN = config('QSTASH_TOKEN', default=None)
-QSTASH_URL = config('QSTASH_URL', default="https://qstash.upstash.io")
+
+# Important: django-qstash requires this domain setting
+# Use your actual Vercel domain or a placeholder during build
+QSTASH_DOMAIN = config('QSTASH_DOMAIN', default=None)
+if not QSTASH_DOMAIN:
+    # During build or local, use a fallback (Vercel will override in production)
+    if DEBUG:
+        QSTASH_DOMAIN = "http://127.0.0.1:8000"
+    else:
+        QSTASH_DOMAIN = config('VERCEL_URL', default="https://your-project-name.vercel.app")
+
+# Pass to django-qstash
+DJANGO_QSTASH_DOMAIN = QSTASH_DOMAIN
 
 # Optional: for signature verification (recommended later)
 QSTASH_CURRENT_SIGNING_KEY = config('QSTASH_CURRENT_SIGNING_KEY', default=None)
