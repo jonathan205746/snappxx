@@ -42,11 +42,8 @@ from .serializers import (
 )
 
 from django.db.models.functions import TruncMonth
-from django_qstash import publish
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from rest_framework.permissions import IsAdminUser
-from django_qstash import stashed_task
 from django.conf import settings
 
 logger = logging.getLogger('accounts.finance')
