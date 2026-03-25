@@ -19,7 +19,14 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 DJANGO_ENV = config('DJANGO_ENV', default='development')
 
 
-ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS = ['*']
+# settings.py
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '.vercel.app',
+    'snappx-backend-ochre.vercel.app'
+]
 
 # Application definition
 INSTALLED_APPS = [
