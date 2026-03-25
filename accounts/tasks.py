@@ -12,7 +12,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Sum
-from django_qstash import stashed_task
+from django_qstash import shared_task
 # from celery import shared_task
 from .models import SavingsGroup, Contribution, PayoutOrder, SavingsGoal, Wallet, LedgerEntry, IdempotencyKey, GroupJoinRequest
 from .services import LedgerService
@@ -33,7 +33,7 @@ HEADERS = {
 }
 
 
-@stashed_task(bind=True, max_retries=3, default_retry_delay=60)
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_dawurobo_otp_async(self, phone_number: str):
     """
     GOOGLE FIX: OTP sending MUST be async.
@@ -95,7 +95,7 @@ def verify_and_invalidate_otp_sync(phone_number: str, code: str) -> bool:
         return False
 
 
-@stashed_task
+@shared_task
 def send_group_join_request_email_async(request_id: int):
     """
     Celery task to send an email to the Group Admin notifying them
@@ -155,7 +155,7 @@ def send_group_join_request_email_async(request_id: int):
         return False
 
 
-@stashed_task
+@shared_task
 def send_group_join_response_email_async(request_id: int, action: str):
     """
     Celery task to send an email to the applicant (user) notifying them
@@ -235,7 +235,7 @@ def send_group_join_response_email_async(request_id: int, action: str):
         return False
 
 
-@stashed_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3)
 def process_daily_payouts(self):
     """
     High-performance daily orchestrator for group disbursements.
@@ -258,7 +258,7 @@ def process_daily_payouts(self):
 
     return f"Orchestrator finished. Dispatched {dispatched_count} payout tasks."
 
-@stashed_task(bind=True, max_retries=2)
+@shared_task(bind=True, max_retries=2)
 def execute_group_payout(self, group_id):
     """
     Atomic Payout Logic.
@@ -314,7 +314,7 @@ def execute_group_payout(self, group_id):
         logger.critical(f"CRITICAL PAYOUT ERROR: Group {group_id} - {exc}")
         raise self.retry(exc=exc)
 
-@stashed_task
+@shared_task
 def send_payout_notification_email_async(
     beneficiary_id: int,
     group_id: int,
@@ -380,7 +380,7 @@ def send_payout_notification_email_async(
         print(f"EMAIL SEND ERROR for Beneficiary ID {beneficiary_id}: {e}")
         return False
 
-@stashed_task
+@shared_task
 def send_goal_reminders():
     """
     Celery task to check all active savings goals and send reminder emails.
@@ -505,7 +505,7 @@ def send_reconciliation_alert_to_admins(mismatches):
         fail_silently=False,
     )
 
-@stashed_task
+@shared_task
 def reconcile_financial_integrity():
     """
     THE WATCHDOG: Re-calculates every wallet balance from the Ledger
@@ -543,7 +543,7 @@ def reconcile_financial_integrity():
         send_reconciliation_alert_to_admins(mismatches)
 
 
-@stashed_task
+@shared_task
 def clear_old_idempotency_keys():
     """
     Run this daily via Celery Beat to keep the DB lean.
