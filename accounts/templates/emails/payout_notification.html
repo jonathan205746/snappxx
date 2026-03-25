@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Payout Processed</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+  <body
+    style="
+      margin: 0;
+      padding: 0;
+      background-color: #f4f6f9;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial,
+        sans-serif;
+    "
+  >
+    <table
+      width="100%"
+      cellpadding="0"
+      cellspacing="0"
+      role="presentation"
+      style="background-color: #f4f6f9; padding: 40px 0"
+    >
+      <tr>
+        <td align="center">
+          <!-- Main Container -->
+          <table
+            width="100%"
+            cellpadding="0"
+            cellspacing="0"
+            role="presentation"
+            style="
+              max-width: 600px;
+              background: #ffffff;
+              border-radius: 12px;
+              overflow: hidden;
+              box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            "
+          >
+            <!-- Header -->
+            <tr>
+              <td
+                style="
+                  background: linear-gradient(135deg, #28a745, #20c997);
+                  padding: 40px 30px;
+                  text-align: center;
+                "
+              >
+                <h1
+                  style="
+                    margin: 0;
+                    color: #ffffff;
+                    font-size: 28px;
+                    font-weight: 700;
+                    letter-spacing: -0.5px;
+                  "
+                >
+                  Payout Processed 🎉
+                </h1>
+                <p style="margin: 10px 0 0; color: #e0ffef; font-size: 16px">
+                  Your savings group payout has been sent successfully!
+                </p>
+              </td>
+            </tr>
+            <!-- Body -->
+            <tr>
+              <td
+                style="
+                  padding: 40px 30px;
+                  color: #333333;
+                  font-size: 16px;
+                  line-height: 1.6;
+                "
+              >
+                <p style="margin: 0 0 20px 0">
+                  Hello <strong>{{ beneficiary_name }}</strong>,
+                </p>
+                <p style="margin: 0 0 30px 0">
+                  We're excited to let you know that your payout from the
+                  savings group has been successfully processed and sent to your
+                  Mobile Money account.
+                </p>
+
+                <!-- Details Card -->
+                <table
+                  width="100%"
+                  cellpadding="0"
+                  cellspacing="0"
+                  role="presentation"
+                  style="
+                    background: #f8fff9;
+                    border-radius: 10px;
+                    border: 1px solid #e0f7e9;
+                    overflow: hidden;
+                    margin-bottom: 30px;
+                  "
+                >
+                  <tr>
+                    <td style="padding: 24px">
+                      <table
+                        width="100%"
+                        cellpadding="8"
+                        cellspacing="0"
+                        role="presentation"
+                      >
+                        <tr>
+                          <td style="color: #555; font-size: 15px">
+                            <strong>Group</strong>
+                          </td>
+                          <td style="text-align: right; font-weight: 600">
+                            {{ group_name }}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="color: #555; font-size: 15px">
+                            <strong>Cycle</strong>
+                          </td>
+                          <td style="text-align: right; font-weight: 600">
+                            #{{ cycle }}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="color: #555; font-size: 15px">
+                            <strong>Amount</strong>
+                          </td>
+                          <td
+                            style="
+                              text-align: right;
+                              font-size: 20px;
+                              font-weight: 700;
+                              color: #28a745;
+                            "
+                          >
+                            {{ amount }}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style="color: #555; font-size: 15px">
+                            <strong>Destination</strong>
+                          </td>
+                          <td style="text-align: right; font-weight: 600">
+                            MoMo ({{ momo_number }})
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin: 0 0 30px 0">
+                  The funds should reflect in your Mobile Money account shortly.
+                  If you don't see them within 24 hours, please reach out to our
+                  support team.
+                </p>
+
+                <!-- CTA Button -->
+                <div style="text-align: center; margin: 40px 0">
+                  <a
+                    href="{{ dashboard_url }}"
+                    style="
+                      display: inline-block;
+                      padding: 14px 32px;
+                      background-color: #007bff;
+                      color: #ffffff;
+                      text-decoration: none;
+                      border-radius: 8px;
+                      font-size: 17px;
+                      font-weight: 600;
+                      box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+                    "
+                  >
+                    View Your Dashboard
+                  </a>
+                </div>
+
+                <p style="margin: 0; text-align: center; color: #666">
+                  Check your savings progress and manage your groups anytime.
+                </p>
+
+                <hr
+                  style="
+                    border: none;
+                    border-top: 1px solid #eee;
+                    margin: 40px 0;
+                  "
+                />
+
+                <p
+                  style="
+                    margin: 0;
+                    font-size: 14px;
+                    color: #777;
+                    text-align: center;
+                  "
+                >
+                  Keep saving and growing with us!<br />
+                  <strong>The SnappX Team</strong>
+                </p>
+              </td>
+            </tr>
+            <!-- Footer -->
+            <tr>
+              <td
+                style="
+                  background: #f4f6f9;
+                  padding: 20px;
+                  text-align: center;
+                  font-size: 13px;
+                  color: #999;
+                "
+              >
+                © 2025 SnappX. All rights reserved.<br />
+                If you have any questions, contact us at support@snappx.app
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

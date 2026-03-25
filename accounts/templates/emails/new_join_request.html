@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>New Group Join Request</title>
+  </head>
+
+  <body
+    style="
+      margin: 0;
+      padding: 0;
+      background-color: #f2f4f6;
+      font-family: 'Segoe UI', Arial, sans-serif;
+    "
+  >
+    <table
+      width="100%"
+      cellpadding="0"
+      cellspacing="0"
+      role="presentation"
+      style="background-color: #f2f4f6; padding: 40px 0"
+    >
+      <tr>
+        <td align="center">
+          <!-- Container -->
+          <table
+            width="600"
+            cellpadding="0"
+            cellspacing="0"
+            role="presentation"
+            style="
+              background: #ffffff;
+              border-radius: 10px;
+              overflow: hidden;
+              box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+            "
+          >
+            <!-- Header -->
+            <tr>
+              <td
+                style="
+                  background: linear-gradient(90deg, #007bff, #0056d2);
+                  padding: 25px 30px;
+                "
+              >
+                <h1
+                  style="
+                    margin: 0;
+                    color: #ffffff;
+                    font-size: 24px;
+                    font-weight: 600;
+                  "
+                >
+                  New Member Alert 🚀
+                </h1>
+              </td>
+            </tr>
+
+            <!-- Body -->
+            <tr>
+              <td
+                style="
+                  padding: 30px;
+                  color: #333333;
+                  font-size: 15px;
+                  line-height: 1.6;
+                "
+              >
+                <p style="margin: 0 0 15px 0">
+                  Hello <strong>{{ admin_name }}</strong>,
+                </p>
+
+                <p>
+                  A new user has just requested to join one of your Savings
+                  Groups.
+                </p>
+
+                <!-- Info box -->
+                <div
+                  style="
+                    background: #f9fafc;
+                    padding: 18px;
+                    margin-top: 20px;
+                    border-radius: 6px;
+                    border-left: 5px solid #ffc107;
+                  "
+                >
+                  <p style="margin: 0; font-size: 15px">
+                    <strong>Group:</strong> {{ group_name }}
+                  </p>
+                  <p style="margin: 8px 0 0; font-size: 15px">
+                    <strong>Requester:</strong> {{ requester_name }}
+                  </p>
+                </div>
+
+                <p style="margin-top: 25px">
+                  Please review the request and decide if the applicant should
+                  be approved.
+                </p>
+
+                <!-- Button -->
+                <div style="text-align: center; margin: 35px 0">
+                  <a
+                    href="{{ review_url }}"
+                    style="
+                      padding: 12px 28px;
+                      background-color: #28a745;
+                      color: #ffffff;
+                      text-decoration: none;
+                      border-radius: 6px;
+                      font-size: 16px;
+                      font-weight: 600;
+                      display: inline-block;
+                    "
+                  >
+                    Review Join Requests
+                  </a>
+                </div>
+
+                <p>
+                  This link will take you directly to the review page in the
+                  SnappX dashboard.
+                </p>
+
+                <p style="margin-top: 35px; font-size: 13px; color: #777">
+                  Thanks for keeping your community safe,<br />
+                  <strong>The SnappX Team</strong>
+                </p>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td
+                style="
+                  background: #f2f4f6;
+                  padding: 15px 30px;
+                  text-align: center;
+                  font-size: 12px;
+                  color: #999;
+                "
+              >
+                © 2025 SnappX. All rights reserved.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
