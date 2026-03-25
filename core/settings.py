@@ -43,13 +43,16 @@ INSTALLED_APPS = [
     'auditlog',
     'accounts.apps.AccountsConfig',
 
-    'django_qstash'
+    # 'django_qstash'
 ]
 
-QSTASH_TOKEN = config('QSTASH_TOKEN')
-QSTASH_URL = "https://qstash.upstash.io"
+INSTALLED_APPS += ['django_qstash']
 
-QSTASH_SIGNING_KEY = config('QSTASH_SIGNING_KEY', default=None)
+QSTASH_TOKEN = config('QSTASH_TOKEN', default=None)
+QSTASH_URL = config('QSTASH_URL', default="https://qstash.upstash.io")
+
+# Optional: for signature verification (recommended later)
+QSTASH_CURRENT_SIGNING_KEY = config('QSTASH_CURRENT_SIGNING_KEY', default=None)
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
