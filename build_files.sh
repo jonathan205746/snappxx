@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 echo "=== Setting up Virtual Environment ==="
 python3.12 -m venv venv
@@ -8,10 +9,13 @@ echo "=== Installing dependencies ==="
 pip install --upgrade pip
 pip install -r requirements.txt
 
+echo "=== Creating static directory ==="
+mkdir -p staticfiles
+
 echo "=== Running collectstatic ==="
-python3.12 manage.py collectstatic --noinput --verbosity=0
+python manage.py collectstatic --noinput --clear
 
 echo "=== Running migrations ==="
-python3.12 manage.py migrate --noinput
+python manage.py migrate --noinput
 
 echo "=== Build Finished ==="
