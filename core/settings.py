@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 from decouple import config
 from pathlib import Path
+import dj_database_url
 # from celery.schedules import crontab
 from corsheaders.defaults import default_headers
 
@@ -90,18 +91,17 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
+print(f"--- DJANGO_ENV = {DJANGO_ENV} ---")
+
 # Database Configuration based on Environment
-if DJANGO_ENV == 'production':
-    print("--- Using Production Database ---")
+if DJANGO_ENV == 'production' or not DEBUG:
+    print("--- Using Neon Database (Production / Preview) ---")
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASSWORD'),
-            'HOST': os.getenv('DB_HOST'),
-            'PORT': os.getenv('DB_PORT'),
-        }
+        'default': dj_database_url.config(
+            default=config('DATABASE_URL'),
+            conn_max_age=600,
+            ssl_require=True
+        )
     }
 else:
     print("--- Using Development Database ---")
