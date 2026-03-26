@@ -33,8 +33,8 @@ HEADERS = {
 }
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_dawurobo_otp_async(self, phone_number: str):
+@shared_task
+def send_dawurobo_otp_async(phone_number: str):
     """
     GOOGLE FIX: OTP sending MUST be async.
     A 30s timeout in a request-response cycle is a DoS risk.
@@ -55,7 +55,7 @@ def send_dawurobo_otp_async(self, phone_number: str):
         return {"success": True}
     except Exception as exc:
         logger.error(f"OTP SEND FAIL: {phone_number} - {exc}")
-        raise self.retry(exc=exc)
+        raise exc
 
 
 def verify_and_invalidate_otp_sync(phone_number: str, code: str) -> bool:
@@ -235,8 +235,8 @@ def send_group_join_response_email_async(request_id: int, action: str):
         return False
 
 
-@shared_task(bind=True, max_retries=3)
-def process_daily_payouts(self):
+@shared_task
+def process_daily_payouts():
     """
     High-performance daily orchestrator for group disbursements.
     Uses database-level filtering and iterators to handle 100k+ groups efficiently.
@@ -258,8 +258,8 @@ def process_daily_payouts(self):
 
     return f"Orchestrator finished. Dispatched {dispatched_count} payout tasks."
 
-@shared_task(bind=True, max_retries=2)
-def execute_group_payout(self, group_id):
+@shared_task
+def execute_group_payout(group_id):
     """
     Atomic Payout Logic.
     Ensures 'Conservation of Money' and 'At-Most-Once' execution.
@@ -306,13 +306,13 @@ def execute_group_payout(self, group_id):
                 group.status = 'completed'
             group.save()
 
-            transaction.on_commit(lambda: send_payout_notification_email_async.delay(
+            transaction.on_commit(lambda: send_payout_notification_email_async.stash(
                 beneficiary.id, group.id, current_cycle, str(total_pot)
             ))
 
     except Exception as exc:
         logger.critical(f"CRITICAL PAYOUT ERROR: Group {group_id} - {exc}")
-        raise self.retry(exc=exc)
+        raise exc
 
 @shared_task
 def send_payout_notification_email_async(

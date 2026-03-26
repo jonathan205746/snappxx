@@ -648,7 +648,7 @@ class GroupJoinRequestView(APIView):
                 reason=reason
             )
 
-            send_group_join_request_email_async.delay(new_request.id)
+            send_group_join_request_email_async.stash(new_request.id)
 
             return Response({
                 "message": f"Join request sent to admin of {group.group_name}. The admin has been notified via email."
@@ -785,7 +785,7 @@ class GroupRequestActionView(APIView):
                         "request_id": getattr(request, 'request_id', None)
                     })
 
-                send_group_join_response_email_async.delay(pk, 'approved')
+                send_group_join_response_email_async.stash(pk, 'approved')
 
             except IntegrityError:
                 return Response({"error": "User is already a member."}, status=400)
