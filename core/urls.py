@@ -3,6 +3,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from django_qstash.views import QStashWebhook
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -13,7 +14,7 @@ urlpatterns = [
     # Application/Group Management Endpoints (Groups)
     path('api/accounts/', include('accounts.urls')),
 
-    path('qstash/', include('django_qstash.urls')),
+    path('qstash/webhook/', QStashWebhook, name='qstash-webhook'),
 
     # Swagger Docs Endpoints
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
