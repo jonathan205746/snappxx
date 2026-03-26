@@ -648,7 +648,7 @@ class GroupJoinRequestView(APIView):
                 reason=reason
             )
 
-            send_group_join_request_email_async.stash(new_request.id)
+            send_group_join_request_email_async.delay(new_request.id)
 
             return Response({
                 "message": f"Join request sent to admin of {group.group_name}. The admin has been notified via email."
@@ -785,7 +785,7 @@ class GroupRequestActionView(APIView):
                         "request_id": getattr(request, 'request_id', None)
                     })
 
-                send_group_join_response_email_async.stash(pk, 'approved')
+                send_group_join_response_email_async.delay(pk, 'approved')
 
             except IntegrityError:
                 return Response({"error": "User is already a member."}, status=400)
@@ -1670,7 +1670,7 @@ def run_daily_payouts(request):
     if request.headers.get('X-Cron-Secret') != settings.QSTASH_TOKEN:
         return JsonResponse({"error": "Unauthorized"}, status=401)
 
-    process_daily_payouts.stash()
+    process_daily_payouts.delay()
     return JsonResponse({"status": "daily payouts queued successfully"})
 
 
@@ -1680,7 +1680,7 @@ def run_reconciliation(request):
     if request.headers.get('X-Cron-Secret') != settings.QSTASH_TOKEN:
         return JsonResponse({"error": "Unauthorized"}, status=401)
 
-    reconcile_financial_integrity.stash()
+    reconcile_financial_integrity.delay()
     return JsonResponse({"status": "financial reconciliation queued successfully"})
 
 
@@ -1690,7 +1690,7 @@ def run_clear_idempotency(request):
     if request.headers.get('X-Cron-Secret') != settings.QSTASH_TOKEN:
         return JsonResponse({"error": "Unauthorized"}, status=401)
 
-    clear_old_idempotency_keys.stash()
+    clear_old_idempotency_keys.delay()
     return JsonResponse({"status": "idempotency cleanup queued successfully"})
 
 
@@ -1700,5 +1700,5 @@ def run_goal_reminders(request):
     if request.headers.get('X-Cron-Secret') != settings.QSTASH_TOKEN:
         return JsonResponse({"error": "Unauthorized"}, status=401)
 
-    send_goal_reminders.stash()
+    send_goal_reminders.delay()
     return JsonResponse({"status": "goal reminders queued successfully"})
