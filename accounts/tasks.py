@@ -253,7 +253,7 @@ def process_daily_payouts():
         days_since_start = (today - group.start_date).days
 
         if days_since_start > 0 and days_since_start % group.payout_interval_days == 0:
-            execute_group_payout.stash(group.id)
+            execute_group_payout.delay(group.id)
             dispatched_count += 1
 
     return f"Orchestrator finished. Dispatched {dispatched_count} payout tasks."
@@ -306,7 +306,7 @@ def execute_group_payout(group_id):
                 group.status = 'completed'
             group.save()
 
-            transaction.on_commit(lambda: send_payout_notification_email_async.stash(
+            transaction.on_commit(lambda: send_payout_notification_email_async.delay(
                 beneficiary.id, group.id, current_cycle, str(total_pot)
             ))
 
