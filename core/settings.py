@@ -56,20 +56,27 @@ INSTALLED_APPS = [
 
 INSTALLED_APPS += ['django_qstash']
 
-# These must be present for django-qstash
 QSTASH_TOKEN = config('QSTASH_TOKEN', default=None)
 
-# Important: django-qstash requires this domain setting
-# Use your actual Vercel domain or a placeholder during build
 QSTASH_DOMAIN = config('QSTASH_DOMAIN', default=None)
 if not QSTASH_DOMAIN:
-    # During build or local, use a fallback (Vercel will override in production)
     if DEBUG:
         QSTASH_DOMAIN = "http://127.0.0.1:8000"
     else:
-        QSTASH_DOMAIN = config('VERCEL_URL', default="https://your-project-name.vercel.app")
+        QSTASH_DOMAIN = config('VERCEL_URL', default="https://snappx-backend-ochre.vercel.app")
 
-# Pass to django-qstash
+# === PERMANENT FIX: Prevent django-qstash error on manage.py commands locally ===
+import sys
+if len(sys.argv) > 1 and sys.argv[1] in [
+    'createsuperuser', 'migrate', 'makemigrations', 'collectstatic',
+    'shell', 'dbshell', 'test', 'check', 'flush', 'runserver'
+]:
+    # Only provide dummy values when running management commands locally
+    # (Real values are always used on Vercel production)
+    QSTASH_TOKEN = QSTASH_TOKEN or "dummy-token-for-local-commands"
+    QSTASH_DOMAIN = QSTASH_DOMAIN or "https://snappx-backend-ochre.vercel.app"
+
+# Final assignment required by django-qstash
 DJANGO_QSTASH_DOMAIN = QSTASH_DOMAIN
 
 # Optional: for signature verification (recommended later)
@@ -82,7 +89,6 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -156,7 +162,7 @@ USE_TZ = True
 # STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Ensure this specifically points to that 'static' folder in your root
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 STATICFILES_DIRS = [
