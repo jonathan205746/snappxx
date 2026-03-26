@@ -7,7 +7,7 @@ from .views import(
     MyJoinedGroupsListView, ProfileUpdateView, run_daily_payouts, run_reconciliation, run_clear_idempotency,
     run_goal_reminders,
 )
-from django_qstash.views import QStashWebhook
+# from django_qstash.views import QStashWebhook
 
 from django.urls import path
 
@@ -37,7 +37,7 @@ urlpatterns = [
     path('goals/<int:goal_id>/contribute/', ContributeToGoalView.as_view(), name='goal-contribute'),
     path('goals/<int:id>/', GoalDetailView.as_view(), name='goal-detail'),
 
-    path('webhook/', QStashWebhook, name='qstash-webhook'),
+    # path('webhook/', QStashWebhook, name='qstash-webhook'),
     path('tasks/run-daily-payouts/', run_daily_payouts, name='run-daily-payouts'),
     path('tasks/run-reconciliation/', run_reconciliation, name='run-reconciliation'),
     path('tasks/run-clear-idempotency/', run_clear_idempotency, name='run-clear-idempotency'),

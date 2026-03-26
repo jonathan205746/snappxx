@@ -13,6 +13,8 @@ urlpatterns = [
     # Application/Group Management Endpoints (Groups)
     path('api/accounts/', include('accounts.urls')),
 
+    path('qstash/', include('django_qstash.urls')),
+
     # Swagger Docs Endpoints
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),

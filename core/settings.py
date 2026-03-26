@@ -1,12 +1,12 @@
 # core/settings.py
 
-from datetime import timedelta
+import sys
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 from decouple import config
 from pathlib import Path
 import dj_database_url
-# from celery.schedules import crontab
 from corsheaders.defaults import default_headers
 
 # Load .env file
@@ -18,9 +18,6 @@ SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 DJANGO_ENV = config('DJANGO_ENV', default='development')
 
-
-# ALLOWED_HOSTS = ['*']
-# settings.py
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
@@ -51,22 +48,25 @@ INSTALLED_APPS = [
     'auditlog',
     'accounts.apps.AccountsConfig',
 
-    # 'django_qstash'
 ]
 
 INSTALLED_APPS += ['django_qstash']
-
 QSTASH_TOKEN = config('QSTASH_TOKEN', default=None)
+QSTASH_URL = config('QSTASH_URL', default='https://qstash.upstash.io')
 
 QSTASH_DOMAIN = config('QSTASH_DOMAIN', default=None)
 if not QSTASH_DOMAIN:
     if DEBUG:
         QSTASH_DOMAIN = "http://127.0.0.1:8000"
     else:
-        QSTASH_DOMAIN = config('VERCEL_URL', default="https://snappx-backend-ochre.vercel.app")
+        # VERCEL_URL is just 'something.vercel.app', we must add the protocol
+        v_url = config('VERCEL_URL', default=None)
+        if v_url:
+            QSTASH_DOMAIN = f"https://{v_url}"
+        else:
+            QSTASH_DOMAIN = "https://snappx-backend-ochre.vercel.app"
 
-# === PERMANENT FIX: Prevent django-qstash error on manage.py commands locally ===
-import sys
+
 if len(sys.argv) > 1 and sys.argv[1] in [
     'createsuperuser', 'migrate', 'makemigrations', 'collectstatic',
     'shell', 'dbshell', 'test', 'check', 'flush', 'runserver'
@@ -156,12 +156,6 @@ TIME_ZONE = 'Africa/Accra'
 USE_I18N = True
 USE_TZ = True
 
-# Static files (CSS, JavaScript, Images)
-# STATIC_URL = '/static/'
-# STATICFILES_DIRS = [BASE_DIR / "static"]
-# STATIC_ROOT = BASE_DIR / "staticfiles"
-
-# Ensure this specifically points to that 'static' folder in your root
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
@@ -278,47 +272,6 @@ SERVER_EMAIL = EMAIL_HOST_USER
 # Site Configuration
 SITE_ID = 1
 
-# CELERY_BROKER_URL = os.environ.get(
-#     'CELERY_BROKER_URL',
-#     'redis://localhost:6379/0'
-# )
-# CELERY_RESULT_BACKEND = CELERY_BROKER_URL
-
-# Timezone setting
-# CELERY_TIMEZONE = 'Africa/Accra'
-
-# Acceptable content formats
-# CELERY_ACCEPT_CONTENT = ['json']
-# CELERY_TASK_SERIALIZER = 'json'
-# CELERY_RESULT_SERIALIZER = 'json'
-# CELERY_TASK_ACKS_LATE = True
-# CELERY_TASK_REJECT_ON_WORKER_LOST = True
-# CELERY_BROKER_TRANSPORT_OPTIONS = {'visibility_timeout': 3600}
-
-
-# CELERY_BEAT_SCHEDULE = {
-#     'process-daily-payouts-at-midnight': {
-#         'task': 'accounts.tasks.process_daily_payouts',
-#         'schedule': crontab(hour=0, minute=0),
-#     },
-#     # Financial Reconciliation at 3:00 AM
-#     'reconcile-financial-integrity-at-3am': {
-#         'task': 'accounts.tasks.reconcile_financial_integrity',
-#         'schedule': crontab(hour=3, minute=0),
-#     },
-#     # Cleanup Idempotency Keys at 4:00 AM
-#     'clear-idempotency-keys-daily': {
-#         'task': 'accounts.tasks.clear_old_idempotency_keys',
-#         'schedule': crontab(hour=4, minute=0),
-#     },
-#     # Goal Reminders at 8:00 AM
-#     'send-goal-reminders-daily': {
-#         'task': 'accounts.tasks.send_goal_reminders',
-#         'schedule': crontab(hour=8, minute=0),
-#     },
-# }
-
-
 ENVIRONMENT = config("ENVIRONMENT", default="development")
 
 if ENVIRONMENT == "production":
@@ -326,10 +279,6 @@ if ENVIRONMENT == "production":
 else:
     SITE_URL = "http://127.0.0.1:8000"
 
-
-# ADMINS = [
-#     ('Backend Team', 'pierres717@gmail.com'),
-# ]
 
 ADMINS = [
     'pierres717@gmail.com',
