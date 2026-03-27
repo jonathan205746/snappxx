@@ -709,7 +709,8 @@ class GroupRequestActionView(APIView):
 
     @transaction.atomic
     def post(self, request, pk):
-        # Pessimistic Lock on the Request Row (prevents two threads from processing the SAME request simultaneously.)
+        # 1. Pessimistic Lock on the Request Row
+        # Prevents two threads from processing the SAME request simultaneously.
         try:
             request_obj = GroupJoinRequest.objects.select_for_update(of=('self',)).select_related(
                 'group__admin',
@@ -718,26 +719,26 @@ class GroupRequestActionView(APIView):
         except GroupJoinRequest.DoesNotExist:
             return Response({"error": "Join request not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Authorization Check
+        # 2. Authorization Check
         if request_obj.group.admin != request.user:
             return Response({'detail': 'You are not authorized to handle this request.'},
                             status=status.HTTP_403_FORBIDDEN)
 
-        # Status Validation
+        # 3. Status Validation
         if request_obj.status != 'pending':
             return Response({"error": f"Request is already {request_obj.status}."},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        # Input Validation
+        # 4. Input Validation
         serializer = GroupJoinActionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         action = serializer.validated_data['action']
 
-        # Lock the Group Row (prevents race condition where two different users fill the last spot.)
+        # 5. Lock the Group Row
+        # Prevents race condition where two different admins/threads fill the last spot at once.
         group = SavingsGroup.objects.select_for_update().get(id=request_obj.group.id)
 
         if action == 'approve':
-            # Capacity check inside the lock
             if group.current_members >= group.expected_members:
                 return Response({'error': 'Cannot approve. Group is already full.'},
                                 status=status.HTTP_400_BAD_REQUEST)
@@ -756,21 +757,18 @@ class GroupRequestActionView(APIView):
                 request_obj.handled_at = timezone.now()
                 request_obj.save(update_fields=['status', 'handled_by', 'handled_at'])
 
-                # Log Admin Action
-                logger.info({
-                    "event": "group_join_approved",
-                    "admin_id": request.user.id,
-                    "target_user_id": request_obj.user.id,
-                    "group_id": group.id,
-                    "request_id": getattr(request, 'request_id', None)
-                })
-
                 message = "User approved and added to the group."
 
-                # Automatic Group Activation & Payout Order
+                # 6. Automatic Group Activation & Payout Order
+                is_activating = False
                 if group.current_members >= group.expected_members and not group.start_date:
+                    is_activating = True
                     group.start_date = timezone.now().date()
                     group.save(update_fields=['start_date'])
+
+                    # FIX: Clear any existing payout orders before creating new ones.
+                    # This prevents IntegrityErrors if the activation logic retries.
+                    PayoutOrder.objects.filter(group=group).delete()
 
                     # Generate Rotation: Earliest joined members get paid first
                     memberships = GroupMembership.objects.filter(group=group).order_by('joined_at')
@@ -779,20 +777,32 @@ class GroupRequestActionView(APIView):
                         for idx, m in enumerate(memberships, start=1)
                     ]
                     PayoutOrder.objects.bulk_create(payout_objs)
-
                     message += " Group is now full and payout cycles have been initialized."
 
-                    logger.info({
+                # 7. SUCCESS CALLBACKS (Only run if transaction commits)
+                # This prevents "Ghost Logs" where the log says success but the DB rolled back.
+                transaction.on_commit(lambda: logger.info({
+                    "event": "group_join_approved",
+                    "admin_id": request.user.id,
+                    "target_user_id": request_obj.user.id,
+                    "group_id": group.id,
+                    "request_id": getattr(request, 'request_id', None)
+                }))
+
+                if is_activating:
+                    transaction.on_commit(lambda: logger.info({
                         "event": "group_activated",
                         "group_id": group.id,
                         "start_date": str(group.start_date),
                         "request_id": getattr(request, 'request_id', None)
-                    })
+                    }))
 
-                send_group_join_response_email_async.delay(pk, 'approved')
+                transaction.on_commit(lambda: send_group_join_response_email_async.delay(pk, 'approved'))
 
             except IntegrityError:
-                return Response({"error": "User is already a member."}, status=400)
+                # Usually triggered if GroupMembership uniqueness (user, group) is violated
+                return Response({"error": "User is already a member or a conflict occurred."},
+                                status=status.HTTP_400_BAD_REQUEST)
 
         elif action == 'reject':
             request_obj.status = 'rejected'
@@ -800,18 +810,142 @@ class GroupRequestActionView(APIView):
             request_obj.handled_at = timezone.now()
             request_obj.save(update_fields=['status', 'handled_by', 'handled_at'])
 
-            logger.info({
+            transaction.on_commit(lambda: logger.info({
                 "event": "group_join_rejected",
                 "admin_id": request.user.id,
                 "target_user_id": request_obj.user.id,
                 "group_id": group.id,
                 "request_id": getattr(request, 'request_id', None)
-            })
+            }))
 
-            send_group_join_response_email_async.delay(pk, 'rejected')
+            transaction.on_commit(lambda: send_group_join_response_email_async.delay(pk, 'rejected'))
             message = "User request has been rejected."
 
         return Response({"message": message}, status=status.HTTP_200_OK)
+
+# @extend_schema(
+#     request=GroupJoinActionSerializer,
+#     responses={
+#         200: {'description': 'Request handled successfully.'},
+#         400: {'description': 'Invalid action or request already handled.'},
+#         403: {'description': 'User is not the group admin.'},
+#         404: {'description': 'Request not found.'}
+#     },
+#     description="Group Admin approves or rejects a pending join request.",
+#     tags=['Savings Groups']
+# )
+# class GroupRequestActionView(APIView):
+#     """
+#     Handles approval/rejection of group join requests.
+#     Employs pessimistic locking to prevent race conditions during group filling.
+#     """
+#     permission_classes = [IsAuthenticated, IsGroupAdmin]
+
+#     @transaction.atomic
+#     def post(self, request, pk):
+#         # Pessimistic Lock on the Request Row (prevents two threads from processing the SAME request simultaneously.)
+#         try:
+#             request_obj = GroupJoinRequest.objects.select_for_update(of=('self',)).select_related(
+#                 'group__admin',
+#                 'user__profile'
+#             ).get(pk=pk)
+#         except GroupJoinRequest.DoesNotExist:
+#             return Response({"error": "Join request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+#         # Authorization Check
+#         if request_obj.group.admin != request.user:
+#             return Response({'detail': 'You are not authorized to handle this request.'},
+#                             status=status.HTTP_403_FORBIDDEN)
+
+#         # Status Validation
+#         if request_obj.status != 'pending':
+#             return Response({"error": f"Request is already {request_obj.status}."},
+#                             status=status.HTTP_400_BAD_REQUEST)
+
+#         # Input Validation
+#         serializer = GroupJoinActionSerializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+#         action = serializer.validated_data['action']
+
+#         # Lock the Group Row (prevents race condition where two different users fill the last spot.)
+#         group = SavingsGroup.objects.select_for_update().get(id=request_obj.group.id)
+
+#         if action == 'approve':
+#             # Capacity check inside the lock
+#             if group.current_members >= group.expected_members:
+#                 return Response({'error': 'Cannot approve. Group is already full.'},
+#                                 status=status.HTTP_400_BAD_REQUEST)
+
+#             try:
+#                 # Create membership
+#                 GroupMembership.objects.create(user=request_obj.user, group=group)
+
+#                 # Increment member count
+#                 group.current_members += 1
+#                 group.save(update_fields=['current_members'])
+
+#                 # Update Request Status
+#                 request_obj.status = 'approved'
+#                 request_obj.handled_by = request.user
+#                 request_obj.handled_at = timezone.now()
+#                 request_obj.save(update_fields=['status', 'handled_by', 'handled_at'])
+
+#                 # Log Admin Action
+#                 logger.info({
+#                     "event": "group_join_approved",
+#                     "admin_id": request.user.id,
+#                     "target_user_id": request_obj.user.id,
+#                     "group_id": group.id,
+#                     "request_id": getattr(request, 'request_id', None)
+#                 })
+
+#                 message = "User approved and added to the group."
+
+#                 # Automatic Group Activation & Payout Order
+#                 if group.current_members >= group.expected_members and not group.start_date:
+#                     group.start_date = timezone.now().date()
+#                     group.save(update_fields=['start_date'])
+
+#                     # Generate Rotation: Earliest joined members get paid first
+#                     memberships = GroupMembership.objects.filter(group=group).order_by('joined_at')
+#                     payout_objs = [
+#                         PayoutOrder(group=group, membership=m, position=idx)
+#                         for idx, m in enumerate(memberships, start=1)
+#                     ]
+#                     PayoutOrder.objects.bulk_create(payout_objs)
+
+#                     message += " Group is now full and payout cycles have been initialized."
+
+#                     logger.info({
+#                         "event": "group_activated",
+#                         "group_id": group.id,
+#                         "start_date": str(group.start_date),
+#                         "request_id": getattr(request, 'request_id', None)
+#                     })
+
+#                 send_group_join_response_email_async.delay(pk, 'approved')
+
+#             except IntegrityError:
+#                 return Response({"error": "User is already a member."}, status=400)
+
+#         elif action == 'reject':
+#             request_obj.status = 'rejected'
+#             request_obj.handled_by = request.user
+#             request_obj.handled_at = timezone.now()
+#             request_obj.save(update_fields=['status', 'handled_by', 'handled_at'])
+
+#             logger.info({
+#                 "event": "group_join_rejected",
+#                 "admin_id": request.user.id,
+#                 "target_user_id": request_obj.user.id,
+#                 "group_id": group.id,
+#                 "request_id": getattr(request, 'request_id', None)
+#             })
+
+#             send_group_join_response_email_async.delay(pk, 'rejected')
+#             message = "User request has been rejected."
+
+#         return Response({"message": message}, status=status.HTTP_200_OK)
 
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
