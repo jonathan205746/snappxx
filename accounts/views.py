@@ -567,28 +567,119 @@ class AllGroupsListView(generics.ListAPIView):
         )
 
 
+# class GroupJoinRequestView(APIView):
+#     """Endpoint for users to request to join a group."""
+#     permission_classes = [IsAuthenticated]
+
+#     @extend_schema(
+#             request=GroupJoinRequestCreateSerializer,
+#             responses={
+#                 201: inline_serializer(
+#                     name='JoinRequestSuccess',
+#                     fields={'message': serializers.CharField()}
+#                 ),
+#                 200: inline_serializer(
+#                     name='JoinRequestResubmitSuccess',
+#                     fields={'message': serializers.CharField()}
+#                 ),
+#                 400: {'description': 'Bad request (already member, pending, etc.)'},
+#                 404: {'description': 'Group not found or not active.'}
+#             },
+#             description="Submit a request to join an active savings group. "
+#                         "Optionally include a 'reason' to help the admin decide.",
+#             tags=['Savings Groups']
+#         )
+#     @idempotent_request
+#     @transaction.atomic
+#     def post(self, request, group_id):
+#         serializer = GroupJoinRequestCreateSerializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+#         reason = serializer.validated_data.get('reason', '')
+
+#         try:
+#             group = SavingsGroup.objects.get(id=group_id, status='active')
+#         except SavingsGroup.DoesNotExist:
+#             return Response({"error": "Group not found or not currently active."},
+#                             status=status.HTTP_404_NOT_FOUND)
+
+#         user = request.user
+
+#         # Check if already an approved member
+#         if GroupMembership.objects.filter(user=user, group=group).exists():
+#             return Response(
+#                 {"error": "You are already a member of this group."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+#         try:
+#             existing_request = GroupJoinRequest.objects.get(user=user, group=group)
+#             if existing_request.status == 'approved':
+#                 return Response(
+#                     {"error": "Your request was already approved."},
+#                     status=status.HTTP_400_BAD_REQUEST
+#                 )
+#             elif existing_request.status == 'pending':
+#                 return Response(
+#                     {"error": "You already have a pending request for this group."},
+#                     status=status.HTTP_400_BAD_REQUEST
+#                 )
+#             elif existing_request.status == 'rejected':
+#                 # Allow re-submit with updated reason
+#                 existing_request.status = 'pending'
+#                 existing_request.reason = reason
+#                 existing_request.requested_at = timezone.now()
+#                 existing_request.handled_at = None
+#                 existing_request.handled_by = None
+#                 existing_request.save()
+
+#                 # Side effect: Trigger email
+#                 send_group_join_request_email_async.delay(existing_request.id)
+
+#                 return Response({
+#                     "message": f"Previous request re-submitted to admin of {group.group_name}."
+#                 }, status=status.HTTP_200_OK)
+
+#         except GroupJoinRequest.DoesNotExist:
+#             # Create brand new request
+#             new_request = GroupJoinRequest.objects.create(
+#                 user=user,
+#                 group=group,
+#                 status='pending',
+#                 reason=reason
+#             )
+#             try:
+#                 send_group_join_request_email_async.delay(new_request.id)
+#             except Exception as e:
+#                 logger.error(f"Failed to queue group join email: {e}")
+
+#             # send_group_join_request_email_async.delay(new_request.id)
+
+#             return Response({
+#                 "message": f"Join request sent to admin of {group.group_name}. The admin has been notified via email."
+#             }, status=status.HTTP_201_CREATED)
+
+
 class GroupJoinRequestView(APIView):
     """Endpoint for users to request to join a group."""
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
-            request=GroupJoinRequestCreateSerializer,
-            responses={
-                201: inline_serializer(
-                    name='JoinRequestSuccess',
-                    fields={'message': serializers.CharField()}
-                ),
-                200: inline_serializer(
-                    name='JoinRequestResubmitSuccess',
-                    fields={'message': serializers.CharField()}
-                ),
-                400: {'description': 'Bad request (already member, pending, etc.)'},
-                404: {'description': 'Group not found or not active.'}
-            },
-            description="Submit a request to join an active savings group. "
-                        "Optionally include a 'reason' to help the admin decide.",
-            tags=['Savings Groups']
-        )
+        request=GroupJoinRequestCreateSerializer,
+        responses={
+            201: inline_serializer(
+                name='JoinRequestSuccess',
+                fields={'message': serializers.CharField()}
+            ),
+            200: inline_serializer(
+                name='JoinRequestResubmitSuccess',
+                fields={'message': serializers.CharField()}
+            ),
+            400: {'description': 'Bad request (already member, pending, etc.)'},
+            404: {'description': 'Group not found or not active.'}
+        },
+        description="Submit a request to join an active savings group. Optionally include a 'reason' to help the admin decide.",
+        tags=['Savings Groups']
+    )
     @idempotent_request
     @transaction.atomic
     def post(self, request, group_id):
@@ -604,13 +695,21 @@ class GroupJoinRequestView(APIView):
 
         user = request.user
 
-        # Check if already an approved member
+        # 1. NEW: Check if the user is the admin of the group
+        if group.admin == user:
+            return Response(
+                {"error": "You are the admin of this group. You do not need to send a join request."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Check if already an approved member
         if GroupMembership.objects.filter(user=user, group=group).exists():
             return Response(
                 {"error": "You are already a member of this group."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # 3. Check existing request status
         try:
             existing_request = GroupJoinRequest.objects.get(user=user, group=group)
             if existing_request.status == 'approved':
@@ -652,11 +751,10 @@ class GroupJoinRequestView(APIView):
             except Exception as e:
                 logger.error(f"Failed to queue group join email: {e}")
 
-            # send_group_join_request_email_async.delay(new_request.id)
-
             return Response({
                 "message": f"Join request sent to admin of {group.group_name}. The admin has been notified via email."
             }, status=status.HTTP_201_CREATED)
+
 @extend_schema(
     responses={
         200: GroupJoinRequestSerializer(many=True),
