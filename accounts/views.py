@@ -647,8 +647,12 @@ class GroupJoinRequestView(APIView):
                 status='pending',
                 reason=reason
             )
+            try:
+                send_group_join_request_email_async.delay(new_request.id)
+            except Exception as e:
+                logger.error(f"Failed to queue group join email: {e}")
 
-            send_group_join_request_email_async.delay(new_request.id)
+            # send_group_join_request_email_async.delay(new_request.id)
 
             return Response({
                 "message": f"Join request sent to admin of {group.group_name}. The admin has been notified via email."
