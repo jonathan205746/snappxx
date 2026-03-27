@@ -341,6 +341,7 @@ class SavingsGroupSerializer(serializers.ModelSerializer):
     next_due = serializers.SerializerMethodField(
         help_text="Next payout date (end of current contribution cycle)."
     )
+    is_current_user_admin = serializers.SerializerMethodField()
 
     class Meta:
         model = SavingsGroup
@@ -349,7 +350,8 @@ class SavingsGroupSerializer(serializers.ModelSerializer):
             'payout_timeline_days', 'expected_members', 'current_members',
             'description', 'status', 'status_display', 'created_at',
             'admin_name', 'admin_phone', 'admin_photo',
-            'total_savings', 'total_group_savings', 'next_due', 'public_id'
+            'total_savings', 'total_group_savings', 'next_due', 'public_id',
+            'is_current_user_admin',
         ]
         read_only_fields = ['status', 'current_members', 'created_at']
 
@@ -389,6 +391,13 @@ class SavingsGroupSerializer(serializers.ModelSerializer):
         if obj.next_payout_date:
             return obj.next_payout_date.strftime('%Y-%m-%d')
         return None
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_current_user_admin(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return obj.admin_id == request.user.id
 
 class RequestingUserSerializer(serializers.ModelSerializer):
     """Minimal serializer to show details of the user who submitted the request."""
