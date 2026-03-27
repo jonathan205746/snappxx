@@ -52,14 +52,15 @@ INSTALLED_APPS = [
 
 INSTALLED_APPS += ['django_qstash']
 QSTASH_TOKEN = config('QSTASH_TOKEN', default=None)
-QSTASH_URL = config('QSTASH_URL', default='https://qstash.upstash.io')
+# QSTASH_URL = config('QSTASH_URL', default='https://qstash.upstash.io')
+
+QSTASH_URL = config('ACTUAL_QSTASH_URL', default=config('QSTASH_URL', default='https://qstash.upstash.io'))
 
 QSTASH_DOMAIN = config('QSTASH_DOMAIN', default=None)
 if not QSTASH_DOMAIN:
     if DEBUG:
         QSTASH_DOMAIN = "http://127.0.0.1:8000"
     else:
-        # VERCEL_URL is just 'something.vercel.app', we must add the protocol
         v_url = config('VERCEL_URL', default=None)
         if v_url:
             QSTASH_DOMAIN = f"https://{v_url}"
@@ -71,15 +72,10 @@ if len(sys.argv) > 1 and sys.argv[1] in [
     'createsuperuser', 'migrate', 'makemigrations', 'collectstatic',
     'shell', 'dbshell', 'test', 'check', 'flush', 'runserver'
 ]:
-    # Only provide dummy values when running management commands locally
-    # (Real values are always used on Vercel production)
     QSTASH_TOKEN = QSTASH_TOKEN or "dummy-token-for-local-commands"
     QSTASH_DOMAIN = QSTASH_DOMAIN or "https://snappx-backend-ochre.vercel.app"
 
-# Final assignment required by django-qstash
 DJANGO_QSTASH_DOMAIN = QSTASH_DOMAIN
-
-# Optional: for signature verification (recommended later)
 QSTASH_CURRENT_SIGNING_KEY = config('QSTASH_CURRENT_SIGNING_KEY', default=None)
 
 MIDDLEWARE = [
