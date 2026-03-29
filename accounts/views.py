@@ -61,7 +61,6 @@ class ForgotPasswordView(APIView):
     @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=True))
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
-        User = get_user_model()
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -69,24 +68,85 @@ class ForgotPasswordView(APIView):
 
         try:
             if '@' in login_field:
+                # Email lookup (unchanged)
                 user = User.objects.select_related('profile').get(email=login_field)
+                momo_number = str(user.profile.momo_number)
             else:
-                user = User.objects.select_related('profile').get(profile__momo_number=login_field)
-        except User.DoesNotExist:
-            return Response({"error": "User not found with this email or phone"},
-                            status=status.HTTP_404_NOT_FOUND)
+                # ← FIXED: Use the same secure hash lookup as login/reset/verify
+                parsed_num = phonenumbers.parse(login_field, "GH")
+                if phonenumbers.is_valid_number(parsed_num):
+                    normalized_phone = phonenumbers.format_number(
+                        parsed_num, phonenumbers.PhoneNumberFormat.E164
+                    )
+                else:
+                    normalized_phone = login_field.strip()
 
-        momo_number = str(user.profile.momo_number)
+                salt = getattr(settings, "HASH_SALT", settings.SECRET_KEY)
+                hash_input = f"{normalized_phone}{salt}".encode('utf-8')
+                phone_hash = hashlib.sha256(hash_input).hexdigest()
+
+                user = User.objects.select_related('profile').get(
+                    profile__momo_number_hash=phone_hash
+                )
+                momo_number = str(user.profile.momo_number)
+
+        except (User.DoesNotExist, Profile.DoesNotExist):
+            return Response(
+                {"error": "User not found with this email or phone"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Send OTP
         result = send_dawurobo_otp_async(momo_number)
-
         if result.get("success"):
+            # Nice masked phone for frontend UX
+            masked_phone = f"{momo_number[:4]}•••{momo_number[-4:]}"
             return Response({
                 "message": "OTP sent to your registered phone for password reset.",
-                "phone": momo_number
+                "phone": momo_number,      # used internally by frontend
+                "masked_phone": masked_phone
             }, status=status.HTTP_200_OK)
         else:
-            return Response({"error": "Failed to send OTP. Try again later."},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": "Failed to send OTP. Try again later."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+# class ForgotPasswordView(APIView):
+#     permission_classes = [AllowAny]
+#     serializer_class = ForgotPasswordSerializer
+
+#     @method_decorator(ratelimit(key='ip', rate='10/m', method='POST', block=True))
+#     def post(self, request):
+#         serializer = ForgotPasswordSerializer(data=request.data)
+#         User = get_user_model()
+#         if not serializer.is_valid():
+#             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+#         login_field = serializer.validated_data['login_field'].lower().strip()
+
+#         try:
+#             if '@' in login_field:
+#                 user = User.objects.select_related('profile').get(email=login_field)
+#             else:
+#                 user = User.objects.select_related('profile').get(profile__momo_number=login_field)
+#         except User.DoesNotExist:
+#             return Response({"error": "User not found with this email or phone"},
+#                             status=status.HTTP_404_NOT_FOUND)
+
+#         momo_number = str(user.profile.momo_number)
+#         result = send_dawurobo_otp_async(momo_number)
+
+#         if result.get("success"):
+#             masked_phone = f"{momo_number[:4]}•••{momo_number[-4:]}"
+#             return Response({
+#                 "message": "OTP sent to your registered phone for password reset.",
+#                 "phone": momo_number,
+#                 "masked_phone": masked_phone
+#             }, status=status.HTTP_200_OK)
+#         else:
+#             return Response({"error": "Failed to send OTP. Try again later."},
+#                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @method_decorator([
