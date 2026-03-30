@@ -148,7 +148,9 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default=None)
 
-GEMINI_API_KEY = config('GEMINI_API_KEY', default=None)
+# GEMINI_API_KEY = config('GEMINI_API_KEY', default=None)
+
+GROQ_API_KEY = config('GROQ_API_KEY', default=None)
 
 # Internationalization
 LANGUAGE_CODE = 'en-us'
