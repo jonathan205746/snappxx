@@ -1801,7 +1801,6 @@ You help with:
 
 Never give specific investment advice or guarantees. Always recommend consulting a licensed financial advisor for complex decisions."""
 
-
 class AIChatView(APIView):
     """
     Streaming AI chat proxy endpoint.
@@ -1813,7 +1812,6 @@ class AIChatView(APIView):
     def post(self, request):
         messages = request.data.get("messages", [])
 
-        # Basic validation
         if not messages or not isinstance(messages, list):
             return Response(
                 {"error": "A 'messages' list is required."},
@@ -1826,7 +1824,6 @@ class AIChatView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate each message has role + content
         for msg in messages:
             if msg.get("role") not in ("user", "assistant") or not msg.get("content"):
                 return Response(
@@ -1834,7 +1831,6 @@ class AIChatView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        # Ensure conversation starts with a user message (Anthropic requirement)
         if messages[0]["role"] != "user":
             return Response(
                 {"error": "Conversation must begin with a user message."},
@@ -1860,23 +1856,33 @@ class AIChatView(APIView):
                     messages=messages,
                 ) as stream:
                     for text_chunk in stream.text_stream:
-                        # SSE format: "data: <chunk>\n\n"
-                        # We escape newlines inside chunks so the SSE frame stays intact
                         safe_chunk = text_chunk.replace("\n", "\\n")
                         yield f"data: {safe_chunk}\n\n"
 
-                # Signal end of stream
                 yield "data: [DONE]\n\n"
 
             except anthropic.AuthenticationError:
                 logger.error("Anthropic API key is invalid.")
                 yield "data: [ERROR] Authentication failed\n\n"
+
             except anthropic.RateLimitError:
                 logger.warning(f"Anthropic rate limit hit for user {request.user.id}")
                 yield "data: [ERROR] Rate limit reached. Please try again shortly.\n\n"
+
+            except anthropic.BadRequestError as exc:
+                error_body = exc.response.json() if exc.response else {}
+                error_msg = error_body.get("error", {}).get("message", str(exc))
+                if "credit balance is too low" in error_msg:
+                    logger.critical("Anthropic billing error — credits exhausted.")
+                    yield "data: [ERROR] AI service is temporarily unavailable.\n\n"
+                else:
+                    logger.error(f"Anthropic bad request: {error_msg}")
+                    yield "data: [ERROR] Invalid request to AI service.\n\n"
+
             except anthropic.APIError as exc:
                 logger.error(f"Anthropic API error: {exc}")
                 yield "data: [ERROR] AI service error. Please try again.\n\n"
+
             except Exception as exc:
                 logger.error(f"Unexpected error in AI chat stream: {exc}")
                 yield "data: [ERROR] Something went wrong. Please try again.\n\n"
@@ -1885,7 +1891,6 @@ class AIChatView(APIView):
             event_stream(),
             content_type="text/event-stream",
         )
-        # Required headers for SSE to work correctly
         response["Cache-Control"] = "no-cache"
-        response["X-Accel-Buffering"] = "no"   # Disables Nginx buffering
+        response["X-Accel-Buffering"] = "no"
         return response
