@@ -40,7 +40,8 @@ from .serializers import (
     SavingsGoalSerializer, SavingsGoalUpdateSerializer, GroupsStatsResponseSerializer,
     JoinRequestsStatsSerializer, GroupJoinRequestCreateSerializer
 )
-
+import anthropic
+from django.http import StreamingHttpResponse
 from django.db.models.functions import TruncMonth
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -68,9 +69,10 @@ class ForgotPasswordView(APIView):
 
         try:
             if '@' in login_field:
-                # Email lookup (unchanged)
-                user = User.objects.select_related('profile').get(email=login_field)
-                momo_number = str(user.profile.momo_number)
+                return Response(
+                    {"error": "Please enter your registered phone number (not email)."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             else:
                 # ← FIXED: Use the same secure hash lookup as login/reset/verify
                 parsed_num = phonenumbers.parse(login_field, "GH")
@@ -1779,3 +1781,111 @@ def run_goal_reminders(request):
 
     send_goal_reminders.delay()
     return JsonResponse({"status": "goal reminders queued successfully"})
+
+SNAPPX_SYSTEM_PROMPT = """You are SnappX AI — a warm, sharp financial assistant built for everyday Ghanaians.
+SnappX is a susu/savings app where users create group savings circles, set personal goals, and contribute regularly.
+
+Your personality:
+- Friendly and encouraging, like a knowledgeable older sibling
+- Concrete and practical — always give actionable steps
+- Use Ghanaian context: mention cedis (₵), MoMo, susu groups, chop money, etc. naturally
+- Keep responses concise (3-5 bullet points or short paragraphs max) unless asked for detail
+- End with a question or next step to keep conversation flowing
+
+You help with:
+- Budgeting and expense tracking
+- Savings strategies (personal goals and group susu)
+- Investment basics (treasury bills, fixed deposits, stocks)
+- How to use SnappX features (groups, goals, payouts)
+- General financial literacy for the Ghanaian context
+
+Never give specific investment advice or guarantees. Always recommend consulting a licensed financial advisor for complex decisions."""
+
+
+class AIChatView(APIView):
+    """
+    Streaming AI chat proxy endpoint.
+    Forwards conversation history to Anthropic Claude and streams the response
+    back to the client as Server-Sent Events (SSE).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        messages = request.data.get("messages", [])
+
+        # Basic validation
+        if not messages or not isinstance(messages, list):
+            return Response(
+                {"error": "A 'messages' list is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(messages) > 50:
+            return Response(
+                {"error": "Conversation history too long. Please start a new chat."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate each message has role + content
+        for msg in messages:
+            if msg.get("role") not in ("user", "assistant") or not msg.get("content"):
+                return Response(
+                    {"error": "Each message must have a 'role' (user/assistant) and 'content'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Ensure conversation starts with a user message (Anthropic requirement)
+        if messages[0]["role"] != "user":
+            return Response(
+                {"error": "Conversation must begin with a user message."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        api_key = settings.ANTHROPIC_API_KEY
+        if not api_key:
+            logger.error("ANTHROPIC_API_KEY is not configured.")
+            return Response(
+                {"error": "AI service is not configured. Please contact support."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        def event_stream():
+            try:
+                client = anthropic.Anthropic(api_key=api_key)
+
+                with client.messages.stream(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=1000,
+                    system=SNAPPX_SYSTEM_PROMPT,
+                    messages=messages,
+                ) as stream:
+                    for text_chunk in stream.text_stream:
+                        # SSE format: "data: <chunk>\n\n"
+                        # We escape newlines inside chunks so the SSE frame stays intact
+                        safe_chunk = text_chunk.replace("\n", "\\n")
+                        yield f"data: {safe_chunk}\n\n"
+
+                # Signal end of stream
+                yield "data: [DONE]\n\n"
+
+            except anthropic.AuthenticationError:
+                logger.error("Anthropic API key is invalid.")
+                yield "data: [ERROR] Authentication failed\n\n"
+            except anthropic.RateLimitError:
+                logger.warning(f"Anthropic rate limit hit for user {request.user.id}")
+                yield "data: [ERROR] Rate limit reached. Please try again shortly.\n\n"
+            except anthropic.APIError as exc:
+                logger.error(f"Anthropic API error: {exc}")
+                yield "data: [ERROR] AI service error. Please try again.\n\n"
+            except Exception as exc:
+                logger.error(f"Unexpected error in AI chat stream: {exc}")
+                yield "data: [ERROR] Something went wrong. Please try again.\n\n"
+
+        response = StreamingHttpResponse(
+            event_stream(),
+            content_type="text/event-stream",
+        )
+        # Required headers for SSE to work correctly
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"   # Disables Nginx buffering
+        return response
