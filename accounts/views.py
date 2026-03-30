@@ -40,8 +40,9 @@ from .serializers import (
     SavingsGoalSerializer, SavingsGoalUpdateSerializer, GroupsStatsResponseSerializer,
     JoinRequestsStatsSerializer, GroupJoinRequestCreateSerializer
 )
-import anthropic
+# import anthropic
 from django.http import StreamingHttpResponse
+import google.generativeai as genai
 from django.db.models.functions import TruncMonth
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -1782,6 +1783,8 @@ def run_goal_reminders(request):
     send_goal_reminders.delay()
     return JsonResponse({"status": "goal reminders queued successfully"})
 
+
+
 SNAPPX_SYSTEM_PROMPT = """You are SnappX AI — a warm, sharp financial assistant built for everyday Ghanaians.
 SnappX is a susu/savings app where users create group savings circles, set personal goals, and contribute regularly.
 
@@ -1801,11 +1804,11 @@ You help with:
 
 Never give specific investment advice or guarantees. Always recommend consulting a licensed financial advisor for complex decisions."""
 
+
 class AIChatView(APIView):
     """
-    Streaming AI chat proxy endpoint.
-    Forwards conversation history to Anthropic Claude and streams the response
-    back to the client as Server-Sent Events (SSE).
+    Streaming AI chat proxy using Google Gemini (free tier).
+    Forwards conversation history and streams the response as SSE.
     """
     permission_classes = [IsAuthenticated]
 
@@ -1837,9 +1840,9 @@ class AIChatView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        api_key = settings.ANTHROPIC_API_KEY
+        api_key = settings.GEMINI_API_KEY
         if not api_key:
-            logger.error("ANTHROPIC_API_KEY is not configured.")
+            logger.error("GEMINI_API_KEY is not configured.")
             return Response(
                 {"error": "AI service is not configured. Please contact support."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1847,45 +1850,56 @@ class AIChatView(APIView):
 
         def event_stream():
             try:
-                client = anthropic.Anthropic(api_key=api_key)
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel(
+                    model_name="gemini-1.5-flash",
+                    system_instruction=SNAPPX_SYSTEM_PROMPT,
+                )
 
-                with client.messages.stream(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=1000,
-                    system=SNAPPX_SYSTEM_PROMPT,
-                    messages=messages,
-                ) as stream:
-                    for text_chunk in stream.text_stream:
-                        safe_chunk = text_chunk.replace("\n", "\\n")
+                # Gemini uses 'model' instead of 'assistant' for role names,
+                # and requires the conversation to start with 'user'.
+                # We also need to convert the history format.
+                gemini_history = []
+                for msg in messages[:-1]:  # all but the last message
+                    gemini_history.append({
+                        "role": "model" if msg["role"] == "assistant" else "user",
+                        "parts": [msg["content"]],
+                    })
+
+                last_user_message = messages[-1]["content"]
+
+                chat = model.start_chat(history=gemini_history)
+
+                response_stream = chat.send_message(
+                    last_user_message,
+                    stream=True,
+                )
+
+                for chunk in response_stream:
+                    if chunk.text:
+                        safe_chunk = chunk.text.replace("\n", "\\n")
                         yield f"data: {safe_chunk}\n\n"
 
                 yield "data: [DONE]\n\n"
 
-            except anthropic.AuthenticationError:
-                logger.error("Anthropic API key is invalid.")
-                yield "data: [ERROR] Authentication failed\n\n"
-
-            except anthropic.RateLimitError:
-                logger.warning(f"Anthropic rate limit hit for user {request.user.id}")
-                yield "data: [ERROR] Rate limit reached. Please try again shortly.\n\n"
-
-            except anthropic.BadRequestError as exc:
-                error_body = exc.response.json() if exc.response else {}
-                error_msg = error_body.get("error", {}).get("message", str(exc))
-                if "credit balance is too low" in error_msg:
-                    logger.critical("Anthropic billing error — credits exhausted.")
-                    yield "data: [ERROR] AI service is temporarily unavailable.\n\n"
-                else:
-                    logger.error(f"Anthropic bad request: {error_msg}")
-                    yield "data: [ERROR] Invalid request to AI service.\n\n"
-
-            except anthropic.APIError as exc:
-                logger.error(f"Anthropic API error: {exc}")
-                yield "data: [ERROR] AI service error. Please try again.\n\n"
-
             except Exception as exc:
-                logger.error(f"Unexpected error in AI chat stream: {exc}")
-                yield "data: [ERROR] Something went wrong. Please try again.\n\n"
+                error_str = str(exc).lower()
+
+                if "api_key" in error_str or "invalid" in error_str:
+                    logger.error(f"Gemini API key error: {exc}")
+                    yield "data: [ERROR] Authentication failed\n\n"
+
+                elif "quota" in error_str or "rate" in error_str or "429" in error_str:
+                    logger.warning(f"Gemini rate limit hit for user {request.user.id}")
+                    yield "data: [ERROR] Rate limit reached. Please try again shortly.\n\n"
+
+                elif "resource_exhausted" in error_str:
+                    logger.critical("Gemini quota exhausted.")
+                    yield "data: [ERROR] AI service is temporarily unavailable.\n\n"
+
+                else:
+                    logger.error(f"Unexpected error in AI chat stream: {exc}")
+                    yield "data: [ERROR] Something went wrong. Please try again.\n\n"
 
         response = StreamingHttpResponse(
             event_stream(),
