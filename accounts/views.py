@@ -3,6 +3,7 @@
 import uuid
 import hashlib
 import logging
+import json
 # import google.generativeai as genai
 from django.http import StreamingHttpResponse
 from groq import Groq as GroqClient
@@ -1868,8 +1869,8 @@ class AIChatView(APIView):
                 for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        safe_chunk = content.replace("\n", "\\n")
-                        yield f"data: {safe_chunk}\n\n"
+                        import json
+                        yield f"data: {json.dumps(content)}\n\n"
 
                 yield "data: [DONE]\n\n"
 
