@@ -3,6 +3,8 @@
 import uuid
 import hashlib
 import logging
+import google.generativeai as genai
+from django.http import StreamingHttpResponse
 import cloudinary.uploader
 from django.conf import settings
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, inline_serializer
@@ -41,8 +43,7 @@ from .serializers import (
     JoinRequestsStatsSerializer, GroupJoinRequestCreateSerializer
 )
 # import anthropic
-from django.http import StreamingHttpResponse
-import google.generativeai as genai
+
 from django.db.models.functions import TruncMonth
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
