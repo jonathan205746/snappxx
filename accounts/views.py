@@ -3,8 +3,10 @@
 import uuid
 import hashlib
 import logging
-import google.generativeai as genai
+# import google.generativeai as genai
 from django.http import StreamingHttpResponse
+from groq import Groq as GroqClient
+import groq as groq_module
 import cloudinary.uploader
 from django.conf import settings
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, inline_serializer
@@ -1805,12 +1807,7 @@ You help with:
 
 Never give specific investment advice or guarantees. Always recommend consulting a licensed financial advisor for complex decisions."""
 
-
 class AIChatView(APIView):
-    """
-    Streaming AI chat proxy using Google Gemini (free tier).
-    Forwards conversation history and streams the response as SSE.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -1841,9 +1838,9 @@ class AIChatView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        api_key = settings.GEMINI_API_KEY
+        api_key = settings.GROQ_API_KEY
         if not api_key:
-            logger.error("GEMINI_API_KEY is not configured.")
+            logger.error("GROQ_API_KEY is not configured.")
             return Response(
                 {"error": "AI service is not configured. Please contact support."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1851,76 +1848,50 @@ class AIChatView(APIView):
 
         def event_stream():
             try:
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(
-                    model_name="gemini-2.0-flash",
-                    system_instruction=SNAPPX_SYSTEM_PROMPT,
+                client = GroqClient(api_key=api_key)
+
+                # Prepend system prompt as a system message
+                groq_messages = [
+                    {"role": "system", "content": SNAPPX_SYSTEM_PROMPT}
+                ] + [
+                    {"role": m["role"], "content": m["content"]}
+                    for m in messages
+                ]
+
+                stream = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=groq_messages,
+                    max_tokens=1000,
+                    stream=True,
                 )
 
-                gemini_history = []
-                for msg in messages[:-1]:
-                    gemini_history.append({
-                        "role": "model" if msg["role"] == "assistant" else "user",
-                        "parts": [msg["content"]],
-                    })
+                for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        safe_chunk = content.replace("\n", "\\n")
+                        yield f"data: {safe_chunk}\n\n"
 
-                last_user_message = messages[-1]["content"]
-                chat = model.start_chat(history=gemini_history)
+                yield "data: [DONE]\n\n"
 
-                # Retry up to 3 times on rate limit with backoff
-                import time
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        response_stream = chat.send_message(
-                            last_user_message,
-                            stream=True,
-                        )
-                        for chunk in response_stream:
-                            if chunk.text:
-                                safe_chunk = chunk.text.replace("\n", "\\n")
-                                yield f"data: {safe_chunk}\n\n"
-                        yield "data: [DONE]\n\n"
-                        return  # success — exit the generator
+            except groq_module.RateLimitError:
+                logger.warning(f"Groq rate limit hit for user {request.user.id}")
+                yield "data: [ERROR] Rate limit reached. Please try again shortly.\n\n"
 
-                    except Exception as inner_exc:
-                        error_str = str(inner_exc).lower()
-                        is_rate_limit = (
-                            "quota" in error_str
-                            or "rate" in error_str
-                            or "429" in error_str
-                            or "resource_exhausted" in error_str
-                        )
-                        if is_rate_limit and attempt < max_retries - 1:
-                            wait_seconds = 2 ** attempt  # 1s, 2s, 4s
-                            logger.warning(
-                                f"Gemini rate limit on attempt {attempt + 1} "
-                                f"for user {request.user.id}. "
-                                f"Retrying in {wait_seconds}s..."
-                            )
-                            time.sleep(wait_seconds)
-                            continue
-                        raise  # re-raise on final attempt or non-rate-limit errors
+            except groq_module.AuthenticationError:
+                logger.error("Groq API key is invalid.")
+                yield "data: [ERROR] Authentication failed\n\n"
+
+            except groq_module.APIConnectionError as exc:
+                logger.error(f"Groq connection error: {exc}")
+                yield "data: [ERROR] Could not connect to AI service. Please try again.\n\n"
+
+            except groq_module.APIStatusError as exc:
+                logger.error(f"Groq API error {exc.status_code}: {exc.message}")
+                yield "data: [ERROR] AI service error. Please try again.\n\n"
 
             except Exception as exc:
-                error_str = str(exc).lower()
-
-                if "api_key" in error_str or "invalid" in error_str:
-                    logger.error(f"Gemini API key error: {exc}")
-                    yield "data: [ERROR] Authentication failed\n\n"
-
-                elif (
-                    "quota" in error_str
-                    or "rate" in error_str
-                    or "429" in error_str
-                    or "resource_exhausted" in error_str
-                ):
-                    logger.warning(f"Gemini rate limit exhausted for user {request.user.id}")
-                    yield "data: [ERROR] Too many requests — please wait a moment and try again.\n\n"
-
-                else:
-                    logger.error(f"Unexpected error in AI chat stream: {exc}")
-                    yield "data: [ERROR] Something went wrong. Please try again.\n\n"
+                logger.error(f"Unexpected error in AI chat stream: {exc}")
+                yield "data: [ERROR] Something went wrong. Please try again.\n\n"
 
         response = StreamingHttpResponse(
             event_stream(),
