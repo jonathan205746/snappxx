@@ -1,7 +1,7 @@
 # accounts/urls.py
 
 from .views import(
-    AnalyticsView, ContributeView, CreateSavingsGoalView, CreateSavingsGroupView, DashboardView, GroupDetailView,
+    AnalyticsView, AIChatView, ContributeView, CreateSavingsGoalView, CreateSavingsGroupView, DashboardView, GroupDetailView,
     AllGroupsListView, GroupJoinRequestView, GroupRequestsListView, GroupRequestActionView,
     GoalsDashboardView, GoalDetailView,ContributeToGoalView, GroupsStatsView, JoinRequestsStatsView,
     MyJoinedGroupsListView, ProfileUpdateView, run_daily_payouts, run_reconciliation, run_clear_idempotency,
@@ -42,4 +42,6 @@ urlpatterns = [
     path('tasks/run-reconciliation/', run_reconciliation, name='run-reconciliation'),
     path('tasks/run-clear-idempotency/', run_clear_idempotency, name='run-clear-idempotency'),
     path('tasks/run-goal-reminders/', run_goal_reminders, name='run-goal-reminders'),
+
+    path('ai/chat/', AIChatView.as_view(), name='ai-chat'),
 ]
