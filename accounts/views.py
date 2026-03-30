@@ -1857,31 +1857,50 @@ class AIChatView(APIView):
                     system_instruction=SNAPPX_SYSTEM_PROMPT,
                 )
 
-                # Gemini uses 'model' instead of 'assistant' for role names,
-                # and requires the conversation to start with 'user'.
-                # We also need to convert the history format.
                 gemini_history = []
-                for msg in messages[:-1]:  # all but the last message
+                for msg in messages[:-1]:
                     gemini_history.append({
                         "role": "model" if msg["role"] == "assistant" else "user",
                         "parts": [msg["content"]],
                     })
 
                 last_user_message = messages[-1]["content"]
-
                 chat = model.start_chat(history=gemini_history)
 
-                response_stream = chat.send_message(
-                    last_user_message,
-                    stream=True,
-                )
+                # Retry up to 3 times on rate limit with backoff
+                import time
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        response_stream = chat.send_message(
+                            last_user_message,
+                            stream=True,
+                        )
+                        for chunk in response_stream:
+                            if chunk.text:
+                                safe_chunk = chunk.text.replace("\n", "\\n")
+                                yield f"data: {safe_chunk}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return  # success — exit the generator
 
-                for chunk in response_stream:
-                    if chunk.text:
-                        safe_chunk = chunk.text.replace("\n", "\\n")
-                        yield f"data: {safe_chunk}\n\n"
-
-                yield "data: [DONE]\n\n"
+                    except Exception as inner_exc:
+                        error_str = str(inner_exc).lower()
+                        is_rate_limit = (
+                            "quota" in error_str
+                            or "rate" in error_str
+                            or "429" in error_str
+                            or "resource_exhausted" in error_str
+                        )
+                        if is_rate_limit and attempt < max_retries - 1:
+                            wait_seconds = 2 ** attempt  # 1s, 2s, 4s
+                            logger.warning(
+                                f"Gemini rate limit on attempt {attempt + 1} "
+                                f"for user {request.user.id}. "
+                                f"Retrying in {wait_seconds}s..."
+                            )
+                            time.sleep(wait_seconds)
+                            continue
+                        raise  # re-raise on final attempt or non-rate-limit errors
 
             except Exception as exc:
                 error_str = str(exc).lower()
@@ -1890,13 +1909,14 @@ class AIChatView(APIView):
                     logger.error(f"Gemini API key error: {exc}")
                     yield "data: [ERROR] Authentication failed\n\n"
 
-                elif "quota" in error_str or "rate" in error_str or "429" in error_str:
-                    logger.warning(f"Gemini rate limit hit for user {request.user.id}")
-                    yield "data: [ERROR] Rate limit reached. Please try again shortly.\n\n"
-
-                elif "resource_exhausted" in error_str:
-                    logger.critical("Gemini quota exhausted.")
-                    yield "data: [ERROR] AI service is temporarily unavailable.\n\n"
+                elif (
+                    "quota" in error_str
+                    or "rate" in error_str
+                    or "429" in error_str
+                    or "resource_exhausted" in error_str
+                ):
+                    logger.warning(f"Gemini rate limit exhausted for user {request.user.id}")
+                    yield "data: [ERROR] Too many requests — please wait a moment and try again.\n\n"
 
                 else:
                     logger.error(f"Unexpected error in AI chat stream: {exc}")
