@@ -146,6 +146,8 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
+ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default=None)
+
 # Internationalization
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Africa/Accra'
