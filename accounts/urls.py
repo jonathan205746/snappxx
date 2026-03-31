@@ -6,7 +6,7 @@ from .views import (
     AllGroupsListView, GroupJoinRequestView, GroupRequestsListView,
     GroupRequestActionView, GoalsDashboardView, GoalDetailView,
     ContributeToGoalView, GroupsStatsView, JoinRequestsStatsView,
-    MyJoinedGroupsListView, ProfileUpdateView, run_daily_payouts,
+    MyJoinedGroupsListView, ProfileUpdateView, RecentActivityView, ScheduledContributionsView, run_daily_payouts,
     run_reconciliation, run_clear_idempotency, run_goal_reminders,
     NotificationListView, NotificationMarkReadView,
     NotificationMarkAllReadView, NotificationUnreadCountView,
@@ -46,6 +46,9 @@ urlpatterns = [
     path('goals/dashboard/', GoalsDashboardView.as_view(), name='goals-dashboard'),
     path('goals/<int:goal_id>/contribute/', ContributeToGoalView.as_view(), name='goal-contribute'),
     path('goals/<int:id>/', GoalDetailView.as_view(), name='goal-detail'),
+
+    path('activity/', RecentActivityView.as_view(), name='recent-activity'),
+    path('scheduled-contributions/', ScheduledContributionsView.as_view(), name='scheduled-contributions'),
 
     # Background task triggers
     path('tasks/run-daily-payouts/', run_daily_payouts, name='run-daily-payouts'),
