@@ -1994,6 +1994,168 @@ class NotificationClearAllView(APIView):
         count, _ = Notification.objects.filter(user=request.user).delete()
         return Response({'success': True, 'deleted_count': count})
 
+
+class RecentActivityView(APIView):
+    """
+    GET /accounts/activity/
+    Returns the last N ledger entries for the authenticated user.
+    These are real, immutable financial events — contributions, payouts, goal deposits.
+
+    Query params:
+      ?limit=10    How many to return (default 10, max 50)
+      ?offset=0    Pagination offset
+      ?type=contribution|payout|goal_contribution|all   Filter by type
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        limit  = min(int(request.query_params.get('limit', 10)), 50)
+        offset = int(request.query_params.get('offset', 0))
+        tx_type = request.query_params.get('type', 'all')
+
+        # Get the user's wallet
+        try:
+            wallet = request.user.wallet
+        except Exception:
+            return Response({'results': [], 'total': 0, 'has_more': False})
+
+        qs = LedgerEntry.objects.filter(
+            wallet=wallet
+        ).select_related(
+            'related_group', 'related_goal', 'actor__profile'
+        ).order_by('-created_at')
+
+        if tx_type != 'all':
+            qs = qs.filter(transaction_type=tx_type)
+
+        total  = qs.count()
+        page   = qs[offset: offset + limit]
+
+        results = []
+        for entry in page:
+            results.append({
+                'id':               str(entry.id),
+                'type':             entry.transaction_type,
+                'direction':        entry.direction,
+                'amount':           str(entry.amount),
+                'description':      entry.description,
+                'reference':        entry.reference,
+                'created_at':       entry.created_at.isoformat(),
+                'related_group_id':   entry.related_group_id,
+                'related_group_name': entry.related_group.group_name if entry.related_group else None,
+                'related_group_public_id': entry.related_group.public_id if entry.related_group else None,
+                'related_goal_id':    entry.related_goal_id,
+                'related_goal_name':  entry.related_goal.name if entry.related_goal else None,
+            })
+
+        return Response({
+            'results':  results,
+            'total':    total,
+            'has_more': (offset + limit) < total,
+        })
+
+
+class ScheduledContributionsView(APIView):
+    """
+    GET /accounts/scheduled-contributions/
+    Returns upcoming group contributions for the current user.
+    Each item tells the frontend: group name, amount, frequency, days until due,
+    whether the user has already contributed this cycle, and whether they have
+    enough wallet balance.
+
+    This is derived from the user's active memberships + group cycle metadata.
+    No extra DB table needed — pure computation from existing models.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user    = request.user
+        today   = timezone.now().date()
+
+        # Wallet balance for sufficiency check
+        try:
+            wallet_balance = user.wallet.current_balance
+        except Exception:
+            wallet_balance = 0
+
+        memberships = GroupMembership.objects.filter(
+            user=user,
+            group__status='active',
+        ).select_related(
+            'group__admin__profile'
+        ).prefetch_related('contributions')
+
+        results = []
+
+        for membership in memberships:
+            group = membership.group
+
+            # Has the user already contributed this cycle?
+            current_cycle = group.current_cycle_number
+            already_contributed = membership.contributions.filter(
+                cycle_number=current_cycle,
+                is_verified=True,
+            ).exists()
+
+            # When is the next contribution due?
+            # Due date = start of the current cycle + interval
+            next_payout = group.next_payout_date   # the deadline for current cycle
+
+            if next_payout:
+                days_until_due = (next_payout - today).days
+                days_until_due = max(0, days_until_due)
+            else:
+                days_until_due = None
+
+            # Status logic
+            if already_contributed:
+                contribution_status = 'completed'
+            elif days_until_due is not None and days_until_due <= 2:
+                contribution_status = 'due_soon'
+            elif days_until_due == 0:
+                contribution_status = 'overdue'
+            else:
+                contribution_status = 'upcoming'
+
+            has_sufficient_balance = wallet_balance >= group.contribution_amount
+
+            results.append({
+                'group_id':              group.id,
+                'group_name':            group.group_name,
+                'group_public_id':       group.public_id,
+                'amount':                str(group.contribution_amount),
+                'frequency':             group.frequency,
+                'current_cycle':         current_cycle,
+                'next_due_date':         next_payout.isoformat() if next_payout else None,
+                'days_until_due':        days_until_due,
+                'already_contributed':   already_contributed,
+                'status':                contribution_status,
+                'has_sufficient_balance': has_sufficient_balance,
+                'wallet_balance':        str(wallet_balance),
+                'total_members':         group.current_members,
+                'contribution_amount':   str(group.contribution_amount),
+            })
+
+        # Sort: overdue first, then due_soon, then upcoming, then completed
+        order = {'overdue': 0, 'due_soon': 1, 'upcoming': 2, 'completed': 3}
+        results.sort(key=lambda x: (order.get(x['status'], 99), x.get('days_until_due') or 9999))
+
+        total_upcoming_amount = sum(
+            float(r['amount']) for r in results
+            if r['status'] in ('upcoming', 'due_soon', 'overdue')
+        )
+
+        return Response({
+            'contributions':        results,
+            'total_upcoming_amount': str(total_upcoming_amount),
+            'wallet_balance':       str(wallet_balance),
+        })
+
+
+# ─── Add to accounts/urls.py ─────────────────────────────────────────────────
+# path('activity/', RecentActivityView.as_view(), name='recent-activity'),
+# path('scheduled-contributions/', ScheduledContributionsView.as_view(), name='scheduled-contributions'),
+
 # # accounts/views.py
 
 # import uuid
