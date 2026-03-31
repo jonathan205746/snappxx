@@ -7,7 +7,7 @@ import phonenumbers
 from time import timezone
 from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import GroupAdminKYC, Profile, SavingsGroup, GroupJoinRequest, GroupMembership, Contribution, SavingsGoal, GoalContribution
+from .models import Notification, GroupAdminKYC, Profile, SavingsGroup, GroupJoinRequest, GroupMembership, Contribution, SavingsGoal, GoalContribution
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
@@ -847,3 +847,72 @@ class ChangePasswordSerializer(serializers.Serializer):
         required=True,
         help_text="New password (minimum 8 characters)"
     )
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    """
+    Full read serializer for Notification objects.
+    Includes computed fields for the frontend (time_ago, group/goal names).
+    """
+    related_group_name = serializers.CharField(
+        source='related_group.group_name',
+        read_only=True,
+        allow_null=True,
+        default=None,
+    )
+    related_group_public_id = serializers.CharField(
+        source='related_group.public_id',
+        read_only=True,
+        allow_null=True,
+        default=None,
+    )
+    related_goal_name = serializers.CharField(
+        source='related_goal.name',
+        read_only=True,
+        allow_null=True,
+        default=None,
+    )
+    time_ago = serializers.SerializerMethodField()
+
+    class Meta:
+        from .models import Notification
+        model = Notification
+        fields = [
+            'id',
+            'notification_type',
+            'title',
+            'message',
+            'is_read',
+            'created_at',
+            'read_at',
+            'action_url',
+            'related_group',
+            'related_group_name',
+            'related_group_public_id',
+            'related_goal',
+            'related_goal_name',
+            'metadata',
+            'time_ago',
+        ]
+        read_only_fields = ['id', 'created_at', 'read_at']
+
+    def get_time_ago(self, obj) -> str:
+        """Concise human-readable relative timestamp."""
+        from django.utils import timezone as tz
+        now     = tz.now()
+        diff    = now - obj.created_at
+        seconds = diff.total_seconds()
+
+        if seconds < 60:
+            return 'just now'
+        elif seconds < 3_600:
+            m = int(seconds / 60)
+            return f'{m}m ago'
+        elif seconds < 86_400:
+            h = int(seconds / 3_600)
+            return f'{h}h ago'
+        elif seconds < 604_800:
+            d = int(seconds / 86_400)
+            return f'{d}d ago'
+        else:
+            return obj.created_at.strftime('%b %-d')
