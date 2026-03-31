@@ -282,8 +282,12 @@ else:
     SITE_URL = "http://127.0.0.1:8000"
 
 
+# ADMINS = [
+#     'pierres717@gmail.com',
+# ]
+
 ADMINS = [
-    'pierres717@gmail.com',
+    ('Pierre', 'pierres717@gmail.com'),
 ]
 
 FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
