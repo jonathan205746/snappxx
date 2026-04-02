@@ -166,10 +166,29 @@ class FullSignupView(APIView):
         email = data['email'].lower().strip()
         momo_number = str(data['momo_number']).strip()
 
+        # Email uniqueness check
         if User.objects.filter(email=email).exists():
             return Response({"error": "This email is already registered"}, status=status.HTTP_400_BAD_REQUEST)
-        if Profile.objects.filter(momo_number=momo_number).exists():
-            return Response({"error": "This MoMo number is already registered"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Normalize the MoMo number to E.164 before hashing — mirrors Profile.save() exactly
+        try:
+            parsed_num = phonenumbers.parse(momo_number, "GH")
+            normalized_momo = (
+                phonenumbers.format_number(parsed_num, phonenumbers.PhoneNumberFormat.E164)
+                if phonenumbers.is_valid_number(parsed_num)
+                else momo_number
+            )
+        except Exception:
+            normalized_momo = momo_number
+
+        salt = getattr(settings, "HASH_SALT", settings.SECRET_KEY)
+        momo_hash = hashlib.sha256(f"{normalized_momo}{salt}".encode("utf-8")).hexdigest()
+
+        if Profile.objects.filter(momo_number_hash=momo_hash).exists():
+            return Response(
+                {"error": "This MoMo number is already registered"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Handle File Upload
         profile_picture_url = None
@@ -196,7 +215,6 @@ class FullSignupView(APIView):
                     is_verified=False
                 )
 
-                # Create Profile
                 Profile.objects.create(
                     user=user,
                     full_name=data['full_name'],
@@ -213,9 +231,39 @@ class FullSignupView(APIView):
                 if not otp_result.get("success"):
                     raise Exception("SMS provider error")
 
+        except IntegrityError as e:
+            logger.error(f"Signup IntegrityError: {e}")
+            # Safety net for race conditions that slip past the pre-checks above
+            error_str = str(e).lower()
+            if 'momo_number_hash' in error_str:
+                return Response(
+                    {"error": "This MoMo number is already registered"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if 'email' in error_str:
+                return Response(
+                    {"error": "This email is already registered"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            return Response(
+                {"error": "Registration failed due to a conflict. Please check your details and try again."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         except Exception as e:
-            logger.error(f"Signup Transaction Failed: {str(e)}")
-            return Response({"error": "Registration failed. Please try again later."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            error_str = str(e)
+            logger.error(f"Signup Transaction Failed: {error_str}")
+
+            if error_str == "SMS provider error":
+                return Response(
+                    {"error": "Account created but we could not send your OTP. Please use 'Resend OTP' to try again."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            return Response(
+                {"error": "Registration failed. Please try again later."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         logger.info({
             "event": "user_registered",
@@ -229,6 +277,98 @@ class FullSignupView(APIView):
             "phone": momo_number,
             "next_step": "verify_otp"
         }, status=status.HTTP_201_CREATED)
+
+
+# class FullSignupView(APIView):
+#     permission_classes = [permissions.AllowAny]
+#     parser_classes = [MultiPartParser]
+
+#     @extend_schema(description="Register user and profile. Triggers OTP.")
+#     @transaction.atomic
+#     @idempotent_request
+#     def post(self, request):
+#         data = request.data
+
+#         required_fields = [
+#             'email', 'password', 'password2', 'full_name', 'date_of_birth',
+#             'user_type', 'ghana_post_address', 'momo_provider', 'momo_number', 'momo_name'
+#         ]
+#         for field in required_fields:
+#             if not data.get(field):
+#                 return Response(
+#                     {"error": f"{field.replace('_', ' ').title()} is required"},
+#                     status=status.HTTP_400_BAD_REQUEST
+#                 )
+
+#         if data['password'] != data['password2']:
+#             return Response({"error": "Passwords do not match"}, status=status.HTTP_400_BAD_REQUEST)
+
+#         email = data['email'].lower().strip()
+#         momo_number = str(data['momo_number']).strip()
+
+#         if User.objects.filter(email=email).exists():
+#             return Response({"error": "This email is already registered"}, status=status.HTTP_400_BAD_REQUEST)
+#         if Profile.objects.filter(momo_number=momo_number).exists():
+#             return Response({"error": "This MoMo number is already registered"}, status=status.HTTP_400_BAD_REQUEST)
+
+#         # Handle File Upload
+#         profile_picture_url = None
+#         if 'profile_picture' in request.FILES:
+#             try:
+#                 upload_result = cloudinary.uploader.upload(
+#                     request.FILES['profile_picture'],
+#                     folder="snappx/profiles/",
+#                     transformation=[
+#                         {'width': 500, 'height': 500, 'crop': 'limit'},
+#                         {'quality': "auto"}
+#                     ]
+#                 )
+#                 profile_picture_url = upload_result.get('secure_url')
+#             except Exception as e:
+#                 logger.warning(f"Cloudinary upload failed: {e}")
+
+#         try:
+#             with transaction.atomic():
+#                 user = User.objects.create_user(
+#                     email=email,
+#                     username=email.split('@')[0],
+#                     password=data['password'],
+#                     is_verified=False
+#                 )
+
+#                 # Create Profile
+#                 Profile.objects.create(
+#                     user=user,
+#                     full_name=data['full_name'],
+#                     date_of_birth=data['date_of_birth'],
+#                     user_type=data['user_type'],
+#                     ghana_post_address=data['ghana_post_address'],
+#                     profile_picture=profile_picture_url,
+#                     momo_provider=data['momo_provider'],
+#                     momo_number=momo_number,
+#                     momo_name=data['momo_name']
+#                 )
+
+#                 otp_result = send_dawurobo_otp_async(momo_number)
+#                 if not otp_result.get("success"):
+#                     raise Exception("SMS provider error")
+
+#         except Exception as e:
+#             logger.error(f"Signup Transaction Failed: {str(e)}")
+#             return Response({"error": "Registration failed. Please try again later."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+#         logger.info({
+#             "event": "user_registered",
+#             "user_id": user.id,
+#             "momo_mask": f"***-{momo_number[-4:]}",
+#             "wallet_initialized": True
+#         })
+
+#         return Response({
+#             "message": "Account created successfully! OTP sent.",
+#             "phone": momo_number,
+#             "next_step": "verify_otp"
+#         }, status=status.HTTP_201_CREATED)
 
 
 @method_decorator([never_cache, ratelimit(key='ip', rate='5/m', method='POST', block=True)], name='dispatch')
