@@ -186,6 +186,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://snappexchange.vercel.app",
+    "https://snappx.app"
 ]
 
 # CORS_ALLOW_HEADERS = list(default_headers) + [
@@ -199,7 +200,11 @@ CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 # For Vercel preview deployments (highly recommended during development)
 CORS_ALLOWED_ORIGIN_REGEXES = [
+    # Allows Vercel preview deployments
     r"^https:\/\/[a-zA-Z0-9-]+\-snappexchange\.vercel\.app$",
+
+    # Allows all subdomains of snappx.app (e.g., https://www.snappx.app, https://dev.snappx.app)
+    r"^https:\/\/[a-zA-Z0-9-]+\.snappx\.app$",
 ]
 
 CORS_ALLOW_HEADERS = [
