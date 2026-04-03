@@ -185,14 +185,48 @@ AUTH_USER_MODEL = 'accounts.User'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://snappexchange.vercel.app",
 ]
 
-CORS_ALLOW_HEADERS = list(default_headers) + [
-    "x-idempotency-key",
+# CORS_ALLOW_HEADERS = list(default_headers) + [
+#     "x-idempotency-key",
+#     "x-request-id",
+# ]
+
+CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+# For Vercel preview deployments (highly recommended during development)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/[a-zA-Z0-9-]+\-snappexchange\.vercel\.app$",
+]
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "x-idempotency-key",      # ← Your custom header
     "x-request-id",
 ]
 
-CORS_ALLOW_CREDENTIALS = True
+CORS_EXPOSE_HEADERS = ["x-request-id"]
+
+# CORS_ALLOW_HEADERS = list(default_headers) + [
+#     "x-idempotency-key",
+#     "x-request-id",
+#     "content-type",
+#     "authorization",
+# ]
+
+# Optional: Only apply CORS to API routes (cleaner)
+CORS_URLS_REGEX = r"^/api/.*$"
 
 # REST Framework + JWT
 REST_FRAMEWORK = {
