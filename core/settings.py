@@ -189,10 +189,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://snappx.app"
 ]
 
-# CORS_ALLOW_HEADERS = list(default_headers) + [
-#     "x-idempotency-key",
-#     "x-request-id",
-# ]
+FRONTEND_URL = config("FRONTEND_URL", default="https://www.snappx.app")
 
 CORS_ALLOW_CREDENTIALS = True
 
