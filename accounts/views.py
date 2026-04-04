@@ -2297,17 +2297,36 @@ class GroupInviteLinkView(APIView):
     """
     GET  /accounts/groups/<group_id>/invite/
          Any member or the admin fetches (and auto-creates) the invite link.
+         <group_id> accepts EITHER the public_id (19-digit string) OR the
+         legacy numeric PK for backward compatibility.
 
     POST /accounts/groups/<group_id>/invite/
          Admin-only: regenerate the token (invalidates all existing links).
     """
     permission_classes = [IsAuthenticated]
 
+    def _get_group(self, group_id_str: str):
+        """
+        Resolves a group from either its public_id or its integer PK.
+        Returns the SavingsGroup instance or raises Http404.
+        """
+        from rest_framework.exceptions import NotFound
+
+        # 1. Try public_id first (the normal case for new groups)
+        group = SavingsGroup.objects.filter(public_id=group_id_str).first()
+        if group:
+            return group
+
+        # 2. Legacy fallback: numeric PK
+        if str(group_id_str).isdigit():
+            group = SavingsGroup.objects.filter(id=int(group_id_str)).first()
+            if group:
+                return group
+
+        raise NotFound({"error": "Group not found."})
+
     def _resolve_group_and_check_access(self, request, group_id):
-        try:
-            group = SavingsGroup.objects.get(id=group_id)
-        except SavingsGroup.DoesNotExist:
-            return None, Response({"error": "Group not found."}, status=404)
+        group = self._get_group(str(group_id))
 
         is_admin  = group.admin_id == request.user.id
         is_member = GroupMembership.objects.filter(
@@ -2349,9 +2368,10 @@ class GroupInviteLinkView(APIView):
         from .models import GroupInviteLink
         import secrets as _secrets
 
-        try:
-            group = SavingsGroup.objects.get(id=group_id, admin=request.user)
-        except SavingsGroup.DoesNotExist:
+        # Resolve group the same way (public_id or PK)
+        group = self._get_group(str(group_id))
+
+        if group.admin_id != request.user.id:
             return Response(
                 {"error": "Group not found or you are not the admin."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -2379,7 +2399,6 @@ class GroupInviteLinkView(APIView):
             "invite_url": invite_url,
             "message":    "Invite link regenerated. Previous links are now invalid.",
         })
-
 
 class InvitePreviewView(APIView):
     """
