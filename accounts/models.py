@@ -3,6 +3,7 @@
 import os
 import uuid
 import random
+import secrets
 from decimal import Decimal
 from phonenumber_field.modelfields import PhoneNumberField
 from django.contrib.auth.models import AbstractUser
@@ -296,6 +297,50 @@ class SavingsGroup(models.Model):
     def clean(self):
         if self.current_members > self.expected_members:
             raise ValidationError("Current members cannot exceed expected members.")
+
+class GroupInviteLink(models.Model):
+    """
+    One persistent, revokable invite token per group.
+    Admin can regenerate the token to invalidate old links.
+    Click-count is incremented atomically on every preview fetch.
+    """
+    group = models.OneToOneField(
+        'SavingsGroup',
+        on_delete=models.CASCADE,
+        related_name='invite_link',
+    )
+    token = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        editable=False,
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_invite_links',
+    )
+    is_active    = models.BooleanField(default=True, db_index=True)
+    click_count  = models.PositiveIntegerField(default=0)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Group Invite Link"
+        verbose_name_plural = "Group Invite Links"
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            import secrets as _secrets
+            self.token = _secrets.token_urlsafe(32)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        flag = "active" if self.is_active else "revoked"
+        return f"Invite for {self.group.group_name} [{flag}]"
+
 
 class GroupJoinRequest(models.Model):
     """
