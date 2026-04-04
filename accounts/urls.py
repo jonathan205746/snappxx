@@ -33,7 +33,7 @@ urlpatterns = [
     # Join request
     path('groups/requests/<int:pk>/action/', GroupRequestActionView.as_view(), name='group-request-action'),
 
-    path('groups/<int:group_id>/invite/', GroupInviteLinkView.as_view(), name='group-invite-link'),
+    path('groups/<str:group_id>/invite/', GroupInviteLinkView.as_view(), name='group-invite-link'),
     path('invite/<str:token>/', InvitePreviewView.as_view(), name='invite-preview'),
 
     # Dynamic group detail
