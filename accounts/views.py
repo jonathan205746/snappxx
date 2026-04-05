@@ -682,7 +682,7 @@ class GroupListPagination(PageNumberPagination):
     8 groups per page for the public 'browse & join' list.
     Callers can override via ?page_size=N (capped at 20).
     """
-    page_size            = 8
+    page_size            = 2
     page_size_query_param = 'page_size'
     max_page_size        = 20
 
