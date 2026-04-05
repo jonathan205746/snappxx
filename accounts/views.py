@@ -10,6 +10,7 @@ import groq as groq_module
 import cloudinary.uploader
 from django.conf import settings
 import secrets as secrets_module
+from rest_framework.pagination import PageNumberPagination
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, inline_serializer
 from .models import GroupInviteLink, LedgerEntry, Notification, Wallet, SavingsGroup, Profile, GroupJoinRequest, GroupMembership, Contribution, PayoutOrder,  SavingsGoal, GoalContribution
 from .tasks import clear_old_idempotency_keys, process_daily_payouts, reconcile_financial_integrity, send_dawurobo_otp_async, send_goal_reminders, verify_and_invalidate_otp_sync, send_group_join_request_email_async, send_group_join_response_email_async
@@ -676,6 +677,16 @@ class GroupDetailView(generics.RetrieveAPIView):
         from rest_framework.exceptions import NotFound
         raise NotFound({"detail": "No SavingsGroup matches the given query."})
 
+class GroupListPagination(PageNumberPagination):
+    """
+    8 groups per page for the public 'browse & join' list.
+    Callers can override via ?page_size=N (capped at 20).
+    """
+    page_size            = 8
+    page_size_query_param = 'page_size'
+    max_page_size        = 20
+
+
 @extend_schema(
     description="Lists all Active savings groups across the platform, allowing filtering and searching.",
     tags=['Savings Groups'],
@@ -698,15 +709,24 @@ class GroupDetailView(generics.RetrieveAPIView):
             location=OpenApiParameter.QUERY,
             description='Filter by exact expected number of members.'
         ),
+        OpenApiParameter(
+            name='page',
+            type={'type': 'integer'},
+            location=OpenApiParameter.QUERY,
+            description='Page number (8 groups per page).'
+        ),
+        OpenApiParameter(
+            name='page_size',
+            type={'type': 'integer'},
+            location=OpenApiParameter.QUERY,
+            description='Override page size (max 20).'
+        ),
     ],
     examples=[
         OpenApiExample(
             name='Filter and Search Example',
             description='Retrieve all weekly groups with "vacation" in the name/description.',
-            value={
-                'search': 'vacation',
-                'frequency': 'weekly'
-            },
+            value={'search': 'vacation', 'frequency': 'weekly'},
             request_only=True
         ),
     ],
@@ -716,17 +736,15 @@ class GroupDetailView(generics.RetrieveAPIView):
     }
 )
 class AllGroupsListView(generics.ListAPIView):
-    """Lists all active savings groups for the platform, with filtering and searching."""
-    serializer_class = SavingsGroupSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, SearchFilter]
-
-    filterset_fields = ['frequency', 'expected_members', 'contribution_amount']
-
-    search_fields = ['group_name', 'description']
+    """Lists all active savings groups for the platform, with filtering, searching, and pagination."""
+    serializer_class    = SavingsGroupSerializer
+    permission_classes  = [IsAuthenticated]
+    pagination_class    = GroupListPagination
+    filter_backends     = [DjangoFilterBackend, SearchFilter]
+    filterset_fields    = ['frequency', 'expected_members', 'contribution_amount']
+    search_fields       = ['group_name', 'description']
 
     def get_queryset(self):
-        # Only show groups that have been approved by an admin
         return (
             SavingsGroup.objects
             .filter(status='active')
