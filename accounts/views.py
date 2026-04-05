@@ -11,7 +11,7 @@ import cloudinary.uploader
 from django.conf import settings
 import secrets as secrets_module
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, inline_serializer
-from .models import LedgerEntry, Notification, Wallet, SavingsGroup, Profile, GroupJoinRequest, GroupMembership, Contribution, PayoutOrder,  SavingsGoal, GoalContribution
+from .models import GroupInviteLink, LedgerEntry, Notification, Wallet, SavingsGroup, Profile, GroupJoinRequest, GroupMembership, Contribution, PayoutOrder,  SavingsGoal, GoalContribution
 from .tasks import clear_old_idempotency_keys, process_daily_payouts, reconcile_financial_integrity, send_dawurobo_otp_async, send_goal_reminders, verify_and_invalidate_otp_sync, send_group_join_request_email_async, send_group_join_response_email_async
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -2444,3 +2444,163 @@ class InvitePreviewView(APIView):
             "spots_remaining":     spots_remaining,
             "is_full":             spots_remaining == 0,
         })
+
+class InviteAcceptView(APIView):
+    """
+    POST /accounts/invite/<token>/accept/
+
+    Authenticated user auto-joins the group that owns this invite token.
+    Bypasses the GroupJoinRequest / admin-approval cycle entirely.
+    The invite link must be active and the group must have capacity.
+
+    Returns 200 if user was already a member (idempotent).
+    Returns 201 on successful auto-join.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, token):
+        # ── 1. Validate the invite token
+        try:
+            invite = GroupInviteLink.objects.select_related(
+                'group__admin__profile'
+            ).get(token=token, is_active=True)
+        except GroupInviteLink.DoesNotExist:
+            return Response(
+                {"error": "This invite link is invalid or has expired."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # ── 2. Lock the group row to prevent concurrent capacity overshoots ───
+        group = SavingsGroup.objects.select_for_update().get(pk=invite.group_id)
+        user  = request.user
+
+        # ── 3. Idempotency: admin is already implicitly a member ──────────────
+        if group.admin_id == user.id:
+            return Response({
+                "already_member": True,
+                "message": "You are the admin of this group.",
+                "group_public_id": group.public_id,
+                "group_id": group.id,
+                "group_name": group.group_name,
+            }, status=status.HTTP_200_OK)
+
+        # ── 4. Idempotency: already a regular member ──────────────────────────
+        if GroupMembership.objects.filter(user=user, group=group).exists():
+            return Response({
+                "already_member": True,
+                "message": "You are already a member of this group.",
+                "group_public_id": group.public_id,
+                "group_id": group.id,
+                "group_name": group.group_name,
+            }, status=status.HTTP_200_OK)
+
+        # ── 5. Capacity guard ─────────────────────────────────────────────────
+        if group.current_members >= group.expected_members:
+            return Response(
+                {"error": "Sorry, this group is already full."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── 6. Status guard (allow pending + active; block completed/rejected) ─
+        if group.status not in ('pending', 'active'):
+            return Response(
+                {"error": "This group is not currently accepting new members."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── 7. Auto-join: create GroupMembership directly ─────────────────────
+        try:
+            GroupMembership.objects.create(user=user, group=group)
+        except IntegrityError:
+            # Concurrent request already created the membership — treat as OK
+            return Response({
+                "already_member": True,
+                "message": "You are already a member of this group.",
+                "group_public_id": group.public_id,
+                "group_id": group.id,
+                "group_name": group.group_name,
+            }, status=status.HTTP_200_OK)
+
+        # Increment member count (row is already locked via select_for_update)
+        group.current_members += 1
+        group.save(update_fields=['current_members'])
+
+        # ── 8. Auto-close any pending join request the user may have sent ─────
+        GroupJoinRequest.objects.filter(
+            user=user, group=group, status='pending'
+        ).update(
+            status='approved',
+            handled_at=timezone.now(),
+            handled_by=group.admin,
+        )
+
+        # ── 9. Notifications (after commit — never block the response) ─────────
+        _group = group
+        _user  = user
+
+        def _notify():
+            try:
+                NotificationService._create(
+                    user=_user,
+                    notification_type='join_approved',
+                    title='You joined via invite! 🎉',
+                    message=(
+                        f'You\'ve been added to "{_group.group_name}" '
+                        f'via an invite link. Welcome aboard!'
+                    ),
+                    related_group=_group,
+                    action_url='Groups',
+                    metadata={
+                        'group_id':         _group.id,
+                        'group_name':       _group.group_name,
+                        'via_invite_link':  True,
+                    },
+                )
+                NotificationService.notify_new_member(_group.admin, _user, _group)
+            except Exception as exc:
+                logger.error(f"[InviteAcceptView] Notification error: {exc}")
+
+        transaction.on_commit(_notify)
+
+        # ── 10. Auto-activate if the group just reached full capacity ──────────
+        is_activating = (
+            group.current_members >= group.expected_members
+            and not group.start_date
+        )
+
+        if is_activating:
+            group.start_date = timezone.now().date()
+            group.save(update_fields=['start_date'])
+
+            # Rebuild the payout rotation in join-order
+            PayoutOrder.objects.filter(group=group).delete()
+            memberships = GroupMembership.objects.filter(
+                group=group
+            ).order_by('joined_at')
+            payout_objs = [
+                PayoutOrder(group=group, membership=m, position=idx)
+                for idx, m in enumerate(memberships, start=1)
+            ]
+            PayoutOrder.objects.bulk_create(payout_objs)
+
+            transaction.on_commit(
+                lambda: NotificationService.notify_group_activated(_group)
+            )
+
+        # ── 11. Audit log ─────────────────────────────────────────────────────
+        logger.info({
+            "event":           "invite_link_auto_join",
+            "user_id":         user.id,
+            "group_id":        group.id,
+            "group_activated": is_activating,
+            "request_id":      getattr(request, 'request_id', None),
+        })
+
+        return Response({
+            "message":          f"Welcome to {group.group_name}! You have been added as a member.",
+            "already_member":   False,
+            "group_public_id":  group.public_id,
+            "group_id":         group.id,
+            "group_name":       group.group_name,
+        }, status=status.HTTP_201_CREATED)
