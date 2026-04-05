@@ -678,14 +678,16 @@ class GroupDetailView(generics.RetrieveAPIView):
         raise NotFound({"detail": "No SavingsGroup matches the given query."})
 
 class GroupListPagination(PageNumberPagination):
-    """
-    8 groups per page for the public 'browse & join' list.
-    Callers can override via ?page_size=N (capped at 20).
-    """
-    page_size            = 2
+    page_size = 2
     page_size_query_param = 'page_size'
-    max_page_size        = 20
+    max_page_size = 20
 
+    def get_page_size(self, request):
+        if self.page_size_query_param:
+            page_size = request.query_params.get(self.page_size_query_param)
+            if page_size:
+                return min(int(page_size), self.max_page_size)
+        return self.page_size
 
 @extend_schema(
     description="Lists all Active savings groups across the platform, allowing filtering and searching.",
