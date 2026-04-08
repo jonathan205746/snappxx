@@ -232,6 +232,7 @@ class GroupAdminKYCSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         user = self.context['request'].user
         return GroupAdminKYC.objects.create(user=user, **validated_data)
+
 class SavingsGroupCreateSerializer(serializers.ModelSerializer):
     kyc = GroupAdminKYCSerializer(required=True)
 
@@ -260,6 +261,8 @@ class SavingsGroupCreateSerializer(serializers.ModelSerializer):
 
 
     def validate_group_name(self, value):
+        if not value or str(value).strip() == '':
+            raise serializers.ValidationError("Group name is required.")
         return html.escape(value.strip())
 
     def validate_description(self, value):
@@ -289,7 +292,6 @@ class SavingsGroupCreateSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
-
         kyc_data = validated_data.pop('kyc', None)
         user = self.context['request'].user
 
@@ -303,16 +305,48 @@ class SavingsGroupCreateSerializer(serializers.ModelSerializer):
                 live_photo=kyc_data.get('live_photo')
             )
 
-        # # Create the Savings Group
         group = SavingsGroup.objects.create(
+            admin=user,                    # ← Required ForeignKey
+            group_name=validated_data['group_name'],
+            contribution_amount=validated_data['contribution_amount'],
+            frequency=validated_data['frequency'],
+            payout_timeline_days=validated_data['payout_timeline_days'],
+            expected_members=validated_data['expected_members'],
+            description=validated_data.get('description', ''),
             status='pending',
-            **validated_data
         )
 
         # Add the admin as the first member
         GroupMembership.objects.create(user=user, group=group)
 
         return group
+
+    # @transaction.atomic
+    # def create(self, validated_data):
+
+    #     kyc_data = validated_data.pop('kyc', None)
+    #     user = self.context['request'].user
+
+    #     # Handle KYC
+    #     kyc_exists = getattr(self, 'kyc_exists', GroupAdminKYC.objects.filter(user=user).exists())
+    #     if not kyc_exists and kyc_data:
+    #         GroupAdminKYC.objects.create(
+    #             user=user,
+    #             ghana_card_front=kyc_data.get('ghana_card_front'),
+    #             ghana_card_back=kyc_data.get('ghana_card_back'),
+    #             live_photo=kyc_data.get('live_photo')
+    #         )
+
+    #     # # Create the Savings Group
+    #     group = SavingsGroup.objects.create(
+    #         status='pending',
+    #         **validated_data
+    #     )
+
+    #     # Add the admin as the first member
+    #     GroupMembership.objects.create(user=user, group=group)
+
+    #     return group
 
 class SavingsGroupSerializer(serializers.ModelSerializer):
     admin_name = serializers.CharField(source='admin.profile.full_name', read_only=True)
