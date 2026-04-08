@@ -285,11 +285,12 @@ class ResetPasswordView(APIView):
         code = serializer.validated_data['code']
         new_password = serializer.validated_data['password']
 
-        normalized_phone = Profile.normalize_momo_number(phone)
-
-        if not verify_and_invalidate_otp_sync(normalized_phone, code):
+        # Verify OTP with RAW phone (as sent to Dawurobo)
+        if not verify_and_invalidate_otp_sync(phone, code):
             return Response({"error": "Invalid or expired OTP"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Normalize ONLY for DB hash lookup
+        normalized_phone = Profile.normalize_momo_number(phone)
         try:
             phone_hash = Profile.compute_momo_hash(normalized_phone)
             profile = Profile.objects.select_related('user').get(momo_number_hash=phone_hash)
@@ -389,10 +390,11 @@ class VerifyOTPView(APIView):
         phone = serializer.validated_data['phone_number']
         code = serializer.validated_data['code']
 
-        normalized_phone = Profile.normalize_momo_number(phone)
-
-        if verify_and_invalidate_otp_sync(normalized_phone, code):
+        # Verify OTP with the RAW number (as it was sent to Dawurobo)
+        if verify_and_invalidate_otp_sync(phone, code):
             try:
+                # Normalize ONLY for the DB hash lookup
+                normalized_phone = Profile.normalize_momo_number(phone)
                 phone_hash = Profile.compute_momo_hash(normalized_phone)
                 profile = Profile.objects.get(momo_number_hash=phone_hash)
 
@@ -407,7 +409,6 @@ class VerifyOTPView(APIView):
                 return Response({"error": "Account not found"}, status=404)
         else:
             return Response({"error": "Invalid or expired OTP"}, status=400)
-
 
 class MeViewResponseSerializer(rest_serializers.Serializer):
     user = rest_serializers.DictField(
