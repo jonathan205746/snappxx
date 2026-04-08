@@ -2,101 +2,129 @@
 
 import logging
 import uuid
-from django.db import transaction
 from decimal import Decimal
+from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.db.models import Sum, Case, When, Value, F, DecimalField
 from .models import Wallet, LedgerEntry
 
 logger = logging.getLogger('accounts.finance')
 
 class LedgerService:
+    """
+    All financial movements MUST go through this service.
+    Guarantees:
+      - LedgerEntry is immutable
+      - Wallet balance updates are atomic and race-free
+      - Only the balance + timestamp are updated (no lost updates)
+    """
+
     @staticmethod
+    @transaction.atomic
     def create_entry(
-        amount, direction, transaction_type, description, reference,
-        user=None, group=None, actor=None, request_id=None, goal=None,
-        transaction_group_id=None, related_group=None, related_goal=None
+        amount: Decimal,
+        direction: str,
+        transaction_type: str,
+        description: str,
+        reference: str,
+        user=None,
+        group=None,
+        actor=None,
+        request_id=None,
+        related_group=None,
+        related_goal=None,
+        transaction_group_id=None,
+        goal=None,
     ):
         """
-        Atomic Single Source of Truth update.
-        Handles both personal User wallets and Group Virtual Wallets (Pots).
+        Creates a single immutable ledger entry and safely updates the wallet balance.
         """
-        with transaction.atomic():
+        if user:
+            wallet = Wallet.objects.select_for_update().get(user=user)
+            owner_label = user.email
+        elif group:
+            wallet = Wallet.objects.select_for_update().get(group=group)
+            owner_label = f"GROUP_POT: {group.group_name}"
+        else:
+            raise ValidationError("Ledger entry must be linked to a user or group.")
 
-            # Identify and initialize the Wallet
-            if user:
-                wallet, _ = Wallet.objects.get_or_create(user=user)
-                owner_label = user.email
-            elif group:
-                wallet, _ = Wallet.objects.get_or_create(group=group)
-                owner_label = f"GROUP_POT: {group.group_name}"
-            else:
-                raise ValidationError("A ledger entry must be associated with either a User or a Group.")
+        # ==================== BALANCE CHECK FOR DEBITS ====================
+        if direction == 'debit':
+            if wallet.current_balance < amount:
+                raise ValidationError(
+                    f"Insufficient wallet balance. Available: ₵{wallet.current_balance:,.2f}, "
+                    f"Required: ₵{amount:,.2f}"
+                )
+        # =================================================================
 
-            # Lock the row
-            wallet = Wallet.objects.select_for_update().get(pk=wallet.pk)
+        effective_actor = actor or user or (group.admin if group else None)
+        if not effective_actor:
+            raise ValidationError("An actor is required for audit trail.")
 
-            # Assign the Actor
-            effective_actor = actor or user or (group.admin if group else None)
-            if not effective_actor:
-                raise ValidationError("An actor (User) must be identified for the audit trail.")
+        entry = LedgerEntry.objects.create(
+            wallet=wallet,
+            actor=effective_actor,
+            amount=amount,
+            direction=direction,
+            transaction_type=transaction_type,
+            description=description,
+            reference=reference,
+            request_id=request_id,
+            related_group=related_group or group,
+            related_goal=related_goal or goal,
+            transaction_group_id=transaction_group_id,
+        )
 
-            # Create immutable Ledger Record
-            entry = LedgerEntry.objects.create(
-                wallet=wallet,
-                actor=effective_actor,
-                amount=amount,
-                direction=direction,
-                transaction_type=transaction_type,
-                description=description,
-                reference=reference,
-                request_id=request_id,
-                related_group=related_group if related_group is not None else group,
-                related_goal=related_goal if related_goal is not None else goal,
-                transaction_group_id=transaction_group_id,
-            )
-            # Update Wallet Balance
-            if direction == 'credit':
-                wallet.current_balance += amount
-            else:
-                wallet.current_balance -= amount
-            wallet.save()
+        if direction == 'credit':
+            wallet.current_balance += amount
+        else:
+            wallet.current_balance -= amount
 
-            logger.info({
-                "event": "ledger_transaction_created",
-                "transaction_id": str(entry.id),
-                "wallet_owner": owner_label,
-                "amount": str(amount),
-                "direction": direction,
-                "new_balance": str(wallet.current_balance),
-                "transaction_group_id": str(transaction_group_id) if transaction_group_id else None
-            })
-            return entry
+        wallet.save(update_fields=['current_balance', 'updated_at'])
+
+        logger.info({
+            "event": "ledger_transaction_created",
+            "transaction_id": str(entry.id),
+            "wallet_owner": owner_label,
+            "amount": str(amount),
+            "direction": direction,
+            "new_balance": str(wallet.current_balance),
+            "transaction_group_id": str(transaction_group_id) if transaction_group_id else None,
+        })
+
+        return entry
 
     @staticmethod
+    @transaction.atomic
     def transfer(
-        amount, transaction_type, description, reference, *,
-        from_user=None, from_group=None,
-        to_user=None, to_group=None,
-        actor=None, request_id=None,
-        related_group=None, related_goal=None
+        amount: Decimal,
+        transaction_type: str,
+        description: str,
+        reference: str,
+        *,
+        from_user=None,
+        from_group=None,
+        to_user=None,
+        to_group=None,
+        actor=None,
+        request_id=None,
+        related_group=None,
+        related_goal=None,
     ):
         """
-        Convenience helper for internal transfers (Double-Entry).
-        Ensures both the Debit and Credit legs happen inside a single database transaction.
+        Double-entry transfer (debit + credit in one atomic transaction).
         """
-        source_count = sum(1 for x in [from_user, from_group] if x is not None)
-        dest_count = sum(1 for x in [to_user, to_group] if x is not None)
-        if source_count != 1 or dest_count != 1:
-            raise ValidationError("Transfer must have exactly one source and one destination wallet.")
+        if sum(x is not None for x in [from_user, from_group]) != 1:
+            raise ValidationError("Exactly one source (from_user or from_group) is required.")
+        if sum(x is not None for x in [to_user, to_group]) != 1:
+            raise ValidationError("Exactly one destination (to_user or to_group) is required.")
 
         related_group = related_group or from_group or to_group
-        related_goal = related_goal
+        transaction_group_id = uuid.uuid4()
 
-        with transaction.atomic():
-            transaction_group_id = uuid.uuid4()
-
-            # Perform debit (source )
-            debit_entry = LedgerService.create_entry(
+        try:
+            # Debit source
+            LedgerService.create_entry(
                 amount=amount,
                 direction='debit',
                 transaction_type=transaction_type,
@@ -106,21 +134,12 @@ class LedgerService:
                 group=from_group,
                 actor=actor,
                 request_id=request_id,
-                goal=related_goal,
                 related_group=related_group,
-                transaction_group_id=transaction_group_id
+                related_goal=related_goal,
+                transaction_group_id=transaction_group_id,
             )
 
-            # CONSERVATION OF MONEY CHECK
-            # We verify the source wallet after the debit.
-            # If the source (especially a Group Pot) goes negative, we abort.
-            source_wallet = debit_entry.wallet
-            if source_wallet.current_balance < 0:
-                raise ValidationError(
-                    f"Insufficient funds. Source balance would be {source_wallet.current_balance}"
-                )
-
-            # Perform Credit (Destination)
+            # Credit destination
             LedgerService.create_entry(
                 amount=amount,
                 direction='credit',
@@ -131,20 +150,23 @@ class LedgerService:
                 group=to_group,
                 actor=actor,
                 request_id=request_id,
-                goal=related_goal,
                 related_group=related_group,
-                transaction_group_id=transaction_group_id
+                related_goal=related_goal,
+                transaction_group_id=transaction_group_id,
             )
+
             return transaction_group_id
+
+        except ValidationError as e:
+            if "Insufficient wallet balance" in str(e):
+                raise ValidationError("Insufficient wallet balance for this transaction.")
+            raise
 
     @staticmethod
     def get_balance(user=None, group=None, verify_integrity=False):
-        """
-        Retrieves the balance for either a User or a Group.
-        High-performance read with an optional integrity check.
-        """
         if not user and not group:
             return Decimal('0.00')
+
         try:
             if user:
                 wallet = Wallet.objects.get(user=user)
@@ -152,23 +174,30 @@ class LedgerService:
                 wallet = Wallet.objects.get(group=group)
 
             if verify_integrity:
-                from django.db.models import Sum, Case, When, Value
-                from .models import LedgerEntry
                 agg = LedgerEntry.objects.filter(wallet=wallet).aggregate(
                     calc_balance=Sum(
                         Case(
-                            When(direction='credit', then='amount'),
-                            When(direction='debit', then=-Value(1) * 'amount'),
-                            default=Value(0)
+                            When(direction='credit', then=F('amount')),
+                            When(direction='debit', then=F('amount') * Value(-1)),
+                            default=Value(0),
+                            output_field=DecimalField(max_digits=12, decimal_places=2)
                         )
                     )
                 )
                 calculated = agg['calc_balance'] or Decimal('0.00')
+
                 if calculated != wallet.current_balance:
-                    logger.critical(f"BALANCE MISMATCH: Wallet {wallet.id}. Cached: {wallet.current_balance}, Ledger: {calculated}")
+                    logger.critical(
+                        f"BALANCE MISMATCH: Wallet {wallet.id}. "
+                        f"Cached: {wallet.current_balance}, Ledger: {calculated}"
+                    )
+
             return wallet.current_balance
+
         except Wallet.DoesNotExist:
-            logger.error(f"Missing wallet accessed for {'user ' + str(user.id) if user else 'group ' + str(group.id)}")
+            logger.error(
+                f"Missing wallet for {'user ' + str(user.id) if user else 'group ' + str(group.id)}"
+            )
             return Decimal('0.00')
 
 class NotificationService:
