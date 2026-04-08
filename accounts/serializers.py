@@ -34,26 +34,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         password = attrs['password']
         remember_me = attrs['remember_me']
 
-        # Find user by email or phone (momo_number)
         try:
             if '@' in login_field:
                 user = User.objects.select_related('profile').get(email=login_field)
             else:
-                try:
-                    parsed = phonenumbers.parse(login_field, "GH")
-                    if phonenumbers.is_valid_number(parsed):
-                        normalized_phone = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-                    else:
-                        normalized_phone = login_field.strip()
-                except Exception:
-                    normalized_phone = login_field.strip()
-
-                salt = getattr(settings, "HASH_SALT", settings.SECRET_KEY)
-                hash_input = f"{normalized_phone}{salt}".encode('utf-8')
-                phone_hash = hashlib.sha256(hash_input).hexdigest()
-
-                # Lookup by Hash
-                user = User.objects.select_related('profile').get(profile__momo_number_hash=phone_hash)
+                normalized_phone = Profile.normalize_momo_number(login_field)
+                phone_hash = Profile.compute_momo_hash(normalized_phone)
+                user = User.objects.select_related('profile').get(
+                    profile__momo_number_hash=phone_hash
+                )
 
         except (User.DoesNotExist, Profile.DoesNotExist):
             raise AuthenticationFailed('No user found with this email or phone')
@@ -64,10 +53,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not user.is_verified:
             raise AuthenticationFailed('Account not verified. Please verify your phone first.')
 
-        # Generate tokens
         refresh = RefreshToken.for_user(user)
 
-        # Extend refresh lifetime if remember_me is True
         if remember_me:
             extended_lifetime = settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'] * 30
             refresh.set_exp(lifetime=extended_lifetime)
@@ -915,4 +902,4 @@ class NotificationSerializer(serializers.ModelSerializer):
             d = int(seconds / 86_400)
             return f'{d}d ago'
         else:
-            return obj.created_at.strftime('%b %-d')
+            return f"{obj.created_at.strftime('%b')} {obj.created_at.day}"
