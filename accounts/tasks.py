@@ -65,9 +65,12 @@ def verify_and_invalidate_otp_sync(phone_number: str, code: str) -> bool:
             headers=HEADERS,
             timeout=10
         )
-        # success = verify_resp.status_code == 200 and "success" in verify_resp.text.lower()
         data = verify_resp.json()
-        success = data.get("success") is True
+
+        success = (
+            data.get("status") == "success"
+            or data.get("success") is True
+        )
 
         if success:
             requests.post(
@@ -76,13 +79,13 @@ def verify_and_invalidate_otp_sync(phone_number: str, code: str) -> bool:
                 headers=HEADERS,
                 timeout=3
             )
-            print(f"OTP verified and invalidated for {phone_number}")
+            logger.info(f"OTP verified and invalidated for {phone_number}")
             return True
         else:
-            print(f"Invalid OTP attempt: {verify_resp.text}")
+            logger.warning(f"Invalid OTP attempt: {verify_resp.text}")
             return False
     except Exception as e:
-        print(f"OTP verify/invalidate failed: {e}")
+        logger.error(f"OTP verify/invalidate failed: {e}")
         return False
 
 
