@@ -12,7 +12,8 @@ class AccountsConfig(AppConfig):
         from auditlog.registry import auditlog
         from .models import (
             SavingsGroup, SavingsGoal, Profile,
-            LedgerEntry, Wallet, Contribution
+            LedgerEntry, Wallet, Contribution,
+            PaystackTransaction,
         )
 
         # Register models for audit tracking
@@ -22,3 +23,4 @@ class AccountsConfig(AppConfig):
         auditlog.register(Wallet)
         auditlog.register(Contribution)
         auditlog.register(LedgerEntry)
+        auditlog.register(PaystackTransaction)
