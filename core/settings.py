@@ -329,8 +329,7 @@ if len(sys.argv) > 1 and sys.argv[1] in [
     PAYSTACK_PUBLIC_KEY = PAYSTACK_PUBLIC_KEY or "pk_test_dummy_for_local"
 
 
-# ====================== SECURITY & CRYPTOGRAPHY ======================
-
+# Security
 
 HASH_SALT = config('HASH_SALT', default=None)
 
