@@ -27,11 +27,32 @@ def idempotent_request(view_func):
 
         current_user = request.user if request.user.is_authenticated else None
 
+
         try:
-            payload_json = json.dumps(request.data, sort_keys=True, cls=DjangoJSONEncoder)
+            if (request.content_type and
+                request.content_type.startswith('multipart/form-data')):
+                hashable_data = {}
+                for key, value in request.data.items():
+                    if hasattr(value, 'read') or (
+                        isinstance(value, list) and
+                        any(hasattr(v, 'read') for v in value if v is not None)
+                    ):
+                        continue
+                    hashable_data[key] = value
+            else:
+                # JSON or regular form data
+                hashable_data = request.data
+
+            payload_json = json.dumps(
+                hashable_data,
+                sort_keys=True,
+                cls=DjangoJSONEncoder,
+                default=str  # extra safety net
+            )
             raw_string = f"{request.path}|{payload_json}"
             request_hash = sha256(raw_string.encode()).hexdigest()
-        except (TypeError, ValueError):
+
+        except (TypeError, ValueError, AttributeError):
             request_hash = sha256(request.path.encode()).hexdigest()
 
         existing_record = IdempotencyKey.objects.filter(
@@ -51,7 +72,7 @@ def idempotent_request(view_func):
             with transaction.atomic():
                 response = view_func(view_instance, request, *args, **kwargs)
 
-                if 200 <= response.status_code < 300:
+                if response.status_code < 500:
                     sanitized_body = json.loads(
                         json.dumps(response.data, cls=DjangoJSONEncoder)
                     )
