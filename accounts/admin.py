@@ -1,9 +1,22 @@
-from .models import GoalContribution, GroupAdminKYC, PayoutOrder, SavingsGoal, SavingsGroup, GroupJoinRequest, GroupMembership
+# accounts/admin.py
+
+from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
-from django.contrib import admin
 from django.db import transaction
 from django.utils.safestring import mark_safe
+
+from .models import (
+    GoalContribution,
+    Contribution,
+    GroupAdminKYC,
+    PayoutOrder,
+    SavingsGoal,
+    SavingsGroup,
+    GroupJoinRequest,
+    GroupMembership,
+    PaystackTransaction,
+)
 
 @admin.register(GroupAdminKYC)
 class GroupAdminKYCAdmin(admin.ModelAdmin):
@@ -12,9 +25,7 @@ class GroupAdminKYCAdmin(admin.ModelAdmin):
     search_fields = ['user__email', 'user__profile__momo_number']
 
     fieldsets = (
-        ('User Info', {
-            'fields': ('user', 'created_at')
-        }),
+        ('User Info', {'fields': ('user', 'created_at')}),
         ('Verification Decision', {
             'fields': ('is_manually_verified', 'verified_by', 'verified_at'),
             'description': "Check the images below. If they match, check 'Is Manually Verified' and Save."
@@ -70,6 +81,7 @@ class GroupAdminKYCAdmin(admin.ModelAdmin):
             return mark_safe('<b style="color: green;">✅ Verified</b>')
         return mark_safe('<b style="color: red;">❌ Pending</b>')
 
+
 @admin.register(SavingsGroup)
 class SavingsGroupAdmin(admin.ModelAdmin):
     list_display = ['group_name', 'admin', 'contribution_amount', 'frequency', 'status', 'expected_members', 'created_at']
@@ -80,7 +92,6 @@ class SavingsGroupAdmin(admin.ModelAdmin):
 
     @transaction.atomic
     def approve_groups(self, request, queryset):
-
         updated_count = 0
         for group in queryset:
             group.status = 'active'
@@ -116,6 +127,7 @@ class SavingsGroupAdmin(admin.ModelAdmin):
         queryset.update(status='rejected')
     reject_groups.short_description = "Reject selected groups"
 
+
 @admin.register(GroupJoinRequest)
 class GroupJoinRequestAdmin(admin.ModelAdmin):
     list_display = ['user', 'group', 'status', 'requested_at', 'handled_by']
@@ -137,8 +149,48 @@ class SavingsGoalAdmin(admin.ModelAdmin):
     list_filter = ['frequency', 'created_at']
     search_fields = ['name', 'user__email']
 
+@admin.register(Contribution)
+class ContributionAdmin(admin.ModelAdmin):
+    """Admin for group contributions – paid_at is now fully editable"""
+    list_display = ['membership', 'amount', 'cycle_number', 'paid_at', 'is_verified']
+    list_filter = ['paid_at', 'is_verified', 'cycle_number']
+    search_fields = [
+        'membership__user__email',
+        'membership__user__profile__full_name',
+        'membership__group__group_name'
+    ]
+    ordering = ['-paid_at']
+    # paid_at is deliberately editable (see model change)
+    date_hierarchy = 'paid_at'
+
+
 @admin.register(GoalContribution)
 class GoalContributionAdmin(admin.ModelAdmin):
+    """Admin for personal goal contributions – paid_at is now fully editable"""
     list_display = ['goal', 'amount', 'paid_at', 'is_verified']
     list_filter = ['paid_at', 'is_verified']
-    search_fields = ['goal__name']
+    search_fields = ['goal__name', 'goal__user__email']
+    ordering = ['-paid_at']
+    date_hierarchy = 'paid_at'
+
+
+@admin.register(PaystackTransaction)
+class PaystackTransactionAdmin(admin.ModelAdmin):
+    list_display = [
+        'reference', 'user', 'transaction_type', 'amount',
+        'status', 'paystack_reference', 'created_at'
+    ]
+    list_filter = ['transaction_type', 'status', 'created_at']
+    search_fields = ['reference', 'paystack_reference', 'user__email']
+    readonly_fields = [
+        'reference', 'paystack_reference', 'user', 'transaction_type',
+        'amount', 'status', 'related_group', 'failure_reason',
+        'created_at', 'updated_at'
+    ]
+    ordering = ['-created_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
