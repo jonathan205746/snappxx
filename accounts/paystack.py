@@ -302,11 +302,17 @@ def verify_webhook_signature(payload_bytes: bytes, signature_header: str) -> boo
     if not signature_header:
         return False
 
-    expected = hmac.new(
+    expected = hmac.HMAC(
         secret.encode("utf-8"),
         payload_bytes,
         hashlib.sha512,
     ).hexdigest()
+
+    # expected = hmac.new(
+    #     secret.encode("utf-8"),
+    #     payload_bytes,
+    #     hashlib.sha512,
+    # ).hexdigest()
 
     return hmac.compare_digest(expected, signature_header)
 
