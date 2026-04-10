@@ -4,6 +4,7 @@ import os
 import html
 import hashlib
 import phonenumbers
+import re
 from time import timezone
 from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -133,29 +134,108 @@ class SignupSerializer(serializers.ModelSerializer):
             username=validated_data['email'].split('@')[0]
         )
         return user
+# class ProfileSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Profile
+#         fields = [
+#             'id', 'full_name', 'date_of_birth', 'user_type',
+#             'ghana_post_address', 'profile_picture',
+#             'momo_provider', 'momo_number', 'momo_name'
+#         ]
+
+#         read_only_fields = ('id', 'user')
+
+#     def validate_full_name(self, value):
+#         return html.escape(value.strip())
+
+#     def validate_ghana_post_address(self, value):
+#         return value.strip().upper()
+
+#     def validate_momo_number(self, value):
+#         stripped_value = value.strip()
+#         if len(stripped_value) < 9:
+#             raise serializers.ValidationError("Mobile money number is too short.")
+#         return stripped_value
+
+
 class ProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = Profile
         fields = [
-            'id', 'full_name', 'date_of_birth', 'user_type',
-            'ghana_post_address', 'profile_picture',
-            'momo_provider', 'momo_number', 'momo_name'
+            "id",
+            "full_name",
+            "date_of_birth",
+            "user_type",
+            "ghana_post_address",
+            "profile_picture",
+            "momo_provider",
+            "momo_number",
+            "momo_name",
         ]
 
-        read_only_fields = ('id', 'user')
+        read_only_fields = (
+            "id",
+            "user",
+            "momo_number_hash",
+        )
 
     def validate_full_name(self, value):
-        return html.escape(value.strip())
+        cleaned = html.escape(value.strip())
+        if len(cleaned) < 2:
+            raise serializers.ValidationError("Full name must be at least 2 characters.")
+        if len(cleaned) > 255:
+            raise serializers.ValidationError("Full name too long.")
+        # Block names that are obviously scripts even after escaping
+        if re.search(r"[<>{};]", cleaned):
+            raise serializers.ValidationError("Full name contains invalid characters.")
+        return cleaned
 
     def validate_ghana_post_address(self, value):
-        return value.strip().upper()
+        upper = value.strip().upper()
+        # Enforce the regex the model already has
+        if not re.match(r"^[A-Z]{2}-\d{3}-\d{4}$", upper):
+            raise serializers.ValidationError(
+                "Ghana Post address must match format GA-123-4567."
+            )
+        return upper
 
     def validate_momo_number(self, value):
-        stripped_value = value.strip()
-        if len(stripped_value) < 9:
+        stripped = value.strip()
+        if len(stripped) < 9:
             raise serializers.ValidationError("Mobile money number is too short.")
-        return stripped_value
+        if not re.match(r"^\+?[\d\s\-]{9,15}$", stripped):
+            raise serializers.ValidationError("Mobile money number format is invalid.")
+        return stripped
 
+    def validate_momo_name(self, value):
+        """
+        momo_name maps directly to a Paystack recipient name.
+        A tampered name could redirect payouts even if the number is correct.
+        """
+        cleaned = html.escape(value.strip())
+        if len(cleaned) < 2:
+            raise serializers.ValidationError("MoMo name must be at least 2 characters.")
+        if len(cleaned) > 100:
+            raise serializers.ValidationError("MoMo name too long (max 100 chars).")
+        if re.search(r"[<>{};@#$%^&*]", cleaned):
+            raise serializers.ValidationError("MoMo name contains invalid characters.")
+        return cleaned
+
+    def validate_user_type(self, value):
+        allowed = {"student", "worker"}
+        if value not in allowed:
+            raise serializers.ValidationError(
+                f"user_type must be one of: {', '.join(sorted(allowed))}."
+            )
+        return value
+
+    def validate_momo_provider(self, value):
+        allowed = {"mtn", "telecel", "airteltigo"}
+        if value.lower() not in allowed:
+            raise serializers.ValidationError(
+                f"momo_provider must be one of: {', '.join(sorted(allowed))}."
+            )
+        return value.lower()
 
 class SendOTPSerializer(serializers.Serializer):
     phone_number = serializers.CharField(max_length=20)
