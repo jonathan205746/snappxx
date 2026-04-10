@@ -3,21 +3,14 @@
 import logging
 import uuid
 from decimal import Decimal
-from django.db import transaction
-from django.core.exceptions import ValidationError
-from django.db.models import Sum, Case, When, Value, F, DecimalField
-from .models import Wallet, LedgerEntry
 
-logger = logging.getLogger('accounts.finance')
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.db.models import F, Q
+
+logger = logging.getLogger("accounts.finance")
 
 class LedgerService:
-    """
-    All financial movements MUST go through this service.
-    Guarantees:
-      - LedgerEntry is immutable
-      - Wallet balance updates are atomic and race-free
-      - Only the balance + timestamp are updated (no lost updates)
-    """
 
     @staticmethod
     @transaction.atomic
@@ -36,31 +29,87 @@ class LedgerService:
         transaction_group_id=None,
         goal=None,
     ):
-        """
-        Creates a single immutable ledger entry and safely updates the wallet balance.
-        """
+        from .models import Wallet, LedgerEntry
+
         if user:
-            wallet = Wallet.objects.select_for_update().get(user=user)
             owner_label = user.email
         elif group:
-            wallet = Wallet.objects.select_for_update().get(group=group)
             owner_label = f"GROUP_POT: {group.group_name}"
         else:
             raise ValidationError("Ledger entry must be linked to a user or group.")
-
-        # ==================== BALANCE CHECK FOR DEBITS ====================
-        if direction == 'debit':
-            if wallet.current_balance < amount:
-                raise ValidationError(
-                    f"Insufficient wallet balance. Available: ₵{wallet.current_balance:,.2f}, "
-                    f"Required: ₵{amount:,.2f}"
-                )
-        # =================================================================
 
         effective_actor = actor or user or (group.admin if group else None)
         if not effective_actor:
             raise ValidationError("An actor is required for audit trail.")
 
+        if direction == "debit":
+            # ── ATOMIC conditional debit ─────────────────────────────────────
+            # UPDATE wallet SET current_balance = current_balance - %s
+            # WHERE (user_id=%s OR group_id=%s) AND current_balance >= %s
+            # Returns the number of rows updated (1 = success, 0 = insufficient funds).
+            if user:
+                updated = Wallet.objects.filter(
+                    user=user,
+                    current_balance__gte=amount,
+                ).update(
+                    current_balance=F("current_balance") - amount,
+                )
+            else:
+                updated = Wallet.objects.filter(
+                    group=group,
+                    current_balance__gte=amount,
+                ).update(
+                    current_balance=F("current_balance") - amount,
+                )
+
+            if updated == 0:
+                # Either wallet doesn't exist, or balance was insufficient.
+                # Distinguish the two cases for better error messages.
+                try:
+                    if user:
+                        wallet = Wallet.objects.get(user=user)
+                    else:
+                        wallet = Wallet.objects.get(group=group)
+                    # Wallet exists but balance was too low
+                    raise ValidationError(
+                        f"Insufficient wallet balance. "
+                        f"Available: ₵{wallet.current_balance:,.2f}, "
+                        f"Required: ₵{amount:,.2f}"
+                    )
+                except Wallet.DoesNotExist:
+                    raise ValidationError(
+                        f"Wallet not found for {'user ' + str(user.id) if user else 'group ' + str(group.id)}"
+                    )
+
+            # Re-fetch the wallet to get the updated balance for the log
+            if user:
+                wallet = Wallet.objects.get(user=user)
+            else:
+                wallet = Wallet.objects.get(group=group)
+
+        else:  # credit
+            # Simple F() addition — always safe
+            if user:
+                updated = Wallet.objects.filter(user=user).update(
+                    current_balance=F("current_balance") + amount,
+                )
+            else:
+                updated = Wallet.objects.filter(group=group).update(
+                    current_balance=F("current_balance") + amount,
+                )
+
+            if updated == 0:
+                raise ValidationError(
+                    f"Wallet not found for credit operation on "
+                    f"{'user ' + str(user.id) if user else 'group ' + str(group.id)}"
+                )
+
+            if user:
+                wallet = Wallet.objects.get(user=user)
+            else:
+                wallet = Wallet.objects.get(group=group)
+
+        # ── Write the immutable ledger entry ─────────────────────────────────
         entry = LedgerEntry.objects.create(
             wallet=wallet,
             actor=effective_actor,
@@ -74,13 +123,6 @@ class LedgerService:
             related_goal=related_goal or goal,
             transaction_group_id=transaction_group_id,
         )
-
-        if direction == 'credit':
-            wallet.current_balance += amount
-        else:
-            wallet.current_balance -= amount
-
-        wallet.save(update_fields=['current_balance', 'updated_at'])
 
         logger.info({
             "event": "ledger_transaction_created",
@@ -111,22 +153,20 @@ class LedgerService:
         related_group=None,
         related_goal=None,
     ):
-        """
-        Double-entry transfer (debit + credit in one atomic transaction).
-        """
-        if sum(x is not None for x in [from_user, from_group]) != 1:
-            raise ValidationError("Exactly one source (from_user or from_group) is required.")
-        if sum(x is not None for x in [to_user, to_group]) != 1:
-            raise ValidationError("Exactly one destination (to_user or to_group) is required.")
+        from django.core.exceptions import ValidationError as DjangoValidationError
 
-        related_group = related_group or from_group or to_group
+        if sum(x is not None for x in [from_user, from_group]) != 1:
+            raise DjangoValidationError("Exactly one source is required.")
+        if sum(x is not None for x in [to_user, to_group]) != 1:
+            raise DjangoValidationError("Exactly one destination is required.")
+
+        _related_group = related_group or from_group or to_group
         transaction_group_id = uuid.uuid4()
 
         try:
-            # Debit source
             LedgerService.create_entry(
                 amount=amount,
-                direction='debit',
+                direction="debit",
                 transaction_type=transaction_type,
                 description=f"{description} (Debit)",
                 reference=f"{reference}-DB",
@@ -134,15 +174,14 @@ class LedgerService:
                 group=from_group,
                 actor=actor,
                 request_id=request_id,
-                related_group=related_group,
+                related_group=_related_group,
                 related_goal=related_goal,
                 transaction_group_id=transaction_group_id,
             )
 
-            # Credit destination
             LedgerService.create_entry(
                 amount=amount,
-                direction='credit',
+                direction="credit",
                 transaction_type=transaction_type,
                 description=f"{description} (Credit)",
                 reference=f"{reference}-CR",
@@ -150,22 +189,28 @@ class LedgerService:
                 group=to_group,
                 actor=actor,
                 request_id=request_id,
-                related_group=related_group,
+                related_group=_related_group,
                 related_goal=related_goal,
                 transaction_group_id=transaction_group_id,
             )
 
             return transaction_group_id
 
-        except ValidationError as e:
+        except DjangoValidationError as e:
             if "Insufficient wallet balance" in str(e):
-                raise ValidationError("Insufficient wallet balance for this transaction.")
+                raise DjangoValidationError(
+                    "Insufficient wallet balance for this transaction."
+                )
             raise
 
     @staticmethod
     def get_balance(user=None, group=None, verify_integrity=False):
+        from decimal import Decimal
+        from django.db.models import Sum, Case, When, Value, F, DecimalField
+        from .models import Wallet, LedgerEntry
+
         if not user and not group:
-            return Decimal('0.00')
+            return Decimal("0.00")
 
         try:
             if user:
@@ -177,15 +222,14 @@ class LedgerService:
                 agg = LedgerEntry.objects.filter(wallet=wallet).aggregate(
                     calc_balance=Sum(
                         Case(
-                            When(direction='credit', then=F('amount')),
-                            When(direction='debit', then=F('amount') * Value(-1)),
+                            When(direction="credit", then=F("amount")),
+                            When(direction="debit", then=F("amount") * Value(-1)),
                             default=Value(0),
-                            output_field=DecimalField(max_digits=12, decimal_places=2)
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
                         )
                     )
                 )
-                calculated = agg['calc_balance'] or Decimal('0.00')
-
+                calculated = agg["calc_balance"] or Decimal("0.00")
                 if calculated != wallet.current_balance:
                     logger.critical(
                         f"BALANCE MISMATCH: Wallet {wallet.id}. "
@@ -196,9 +240,11 @@ class LedgerService:
 
         except Wallet.DoesNotExist:
             logger.error(
-                f"Missing wallet for {'user ' + str(user.id) if user else 'group ' + str(group.id)}"
+                f"Missing wallet for "
+                f"{'user ' + str(user.id) if user else 'group ' + str(group.id)}"
             )
-            return Decimal('0.00')
+            return Decimal("0.00")
+
 
 class NotificationService:
     """
