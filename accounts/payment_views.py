@@ -222,7 +222,7 @@ class TopUpInitializeView(APIView):
 # ---------------------------------------------------------------------------
 PAYSTACK_IPS = frozenset({"52.31.139.75", "52.49.173.169", "52.214.14.220"})
 
-@extend_schema(exclude=True)   # Don't expose in Swagger — it's for Paystack only
+@extend_schema(exclude=True)
 class PaystackWebhookView(APIView):
     """
     Receives all Paystack webhook events.
@@ -246,46 +246,44 @@ class PaystackWebhookView(APIView):
         return super().dispatch(request, *args, **kwargs)
 
     def post(self, request):
-        '''Note: only enable this on production. In test/staging,
-        Paystack sends from different IPs.
-        Guard with if DJANGO_ENV == 'production':.'''
+        # ALWAYS verify HMAC first
+        signature = request.headers.get("x-paystack-signature", "")
 
-        django_env = getattr(settings, 'DJANGO_ENV', 'development')
-        if django_env == 'production':
+        if not verify_webhook_signature(request.body, signature):
+            logger.warning({
+                "event": "webhook_invalid_signature",
+                "ip": request.META.get("REMOTE_ADDR"),
+                "env": getattr(settings, "DJANGO_ENV", "unknown"),
+            })
+            # Always return 200 — returning 4xx causes Paystack to retry
+            return Response({"status": "ignored"}, status=200)
+
+        # Optional IP allowlist (production only, defence-in-depth) ─
+        django_env = getattr(settings, "DJANGO_ENV", "development")
+        if django_env == "production":
             client_ip = (
                 request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
                 or request.META.get("REMOTE_ADDR", "")
             )
             if client_ip not in PAYSTACK_IPS:
-                logger.warning({"event": "webhook_ip_rejected", "ip": client_ip})
-                return Response({"status": "ignored"}, status=status.HTTP_200_OK)
+                logger.warning({
+                    "event": "webhook_ip_rejected",
+                    "ip": client_ip,
+                    "note": "HMAC was valid but IP not in allowlist",
+                })
 
-        # ── 1. Verify signature FIRST ────────────────────────────────────────
-        signature = request.headers.get("x-paystack-signature", "")
-
-        if not verify_webhook_signature(request.body, signature):
-            logger.warning(
-                {
-                    "event": "webhook_invalid_signature",
-                    "ip": request.META.get("REMOTE_ADDR"),
-                }
-            )
-            # Return 200 anyway — a 4xx causes Paystack to retry which wastes retries
-            # on legitimately bad actors. We just ignore silently.
-            return Response({"status": "ignored"}, status=status.HTTP_200_OK)
-
-        # ── 2. Parse payload ─────────────────────────────────────────────────
+        # Parse and route
         try:
             payload = json.loads(request.body)
         except json.JSONDecodeError:
-            return Response({"status": "bad_json"}, status=status.HTTP_200_OK)
+            logger.warning({"event": "webhook_bad_json"})
+            return Response({"status": "bad_json"}, status=200)
 
         event = payload.get("event", "")
         data = payload.get("data", {})
 
         logger.info({"event": "paystack_webhook_received", "paystack_event": event})
 
-        # ── 3. Route to handler ──────────────────────────────────────────────
         try:
             if event == "charge.success":
                 self._handle_charge_success(data)
@@ -298,18 +296,14 @@ class PaystackWebhookView(APIView):
             else:
                 logger.info({"event": "webhook_unhandled", "paystack_event": event})
         except Exception as exc:
-            # NEVER let an exception bubble out — Paystack must receive 200
-            logger.critical(
-                {
-                    "event": "webhook_handler_exception",
-                    "paystack_event": event,
-                    "error": str(exc),
-                }
-            )
+            logger.critical({
+                "event": "webhook_handler_exception",
+                "paystack_event": event,
+                "error": str(exc),
+            })
 
-        return Response({"status": "ok"}, status=status.HTTP_200_OK)
+        return Response({"status": "ok"}, status=200)
 
-    # ── charge.success ───────────────────────────────────────────────────────
 
     @transaction.atomic
     def _handle_charge_success(self, data: dict):
