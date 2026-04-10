@@ -1,11 +1,4 @@
-"""
-core/urls.py
-
-Changes vs original:
-1. Admin URL reads from settings.ADMIN_PATH (set via ADMIN_PATH env var)
-2. Swagger/schema endpoints are gated behind staff login in production
-3. In development, Swagger is fully open (no change to your workflow)
-"""
+# core/urls.py
 
 from django.contrib import admin
 from django.urls import path, include
