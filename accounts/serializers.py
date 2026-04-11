@@ -5,7 +5,6 @@ import html
 import hashlib
 import phonenumbers
 import re
-from time import timezone
 from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Notification, GroupAdminKYC, Profile, SavingsGroup, GroupJoinRequest, GroupMembership, Contribution, SavingsGoal, GoalContribution
@@ -1017,3 +1016,174 @@ class NotificationSerializer(serializers.ModelSerializer):
             return f'{d}d ago'
         else:
             return f"{obj.created_at.strftime('%b')} {obj.created_at.day}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GROUP DETAIL — Transparency serializers
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GroupMembershipDetailSerializer(serializers.ModelSerializer):
+    """
+    Per-member snapshot for the group detail transparency panel.
+    Reads contribution status from prefetched data to avoid N+1 queries.
+    Payout position is injected via context['payout_position_map'] by
+    GroupDetailSerializer.get_members().
+    """
+    user_id = serializers.IntegerField(source="user.id", read_only=True)
+    full_name = serializers.CharField(source="user.profile.full_name", read_only=True)
+    profile_picture = serializers.URLField(
+        source="user.profile.profile_picture", read_only=True, allow_null=True
+    )
+    is_admin = serializers.SerializerMethodField()
+    has_contributed_this_cycle = serializers.SerializerMethodField()
+    payout_position = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GroupMembership
+        fields = [
+            "id",
+            "user_id",
+            "full_name",
+            "profile_picture",
+            "joined_at",
+            "is_admin",
+            "has_contributed_this_cycle",
+            "payout_position",
+        ]
+
+    def get_is_admin(self, obj: GroupMembership) -> bool:
+        return obj.group.admin_id == obj.user_id
+
+    def get_has_contributed_this_cycle(self, obj: GroupMembership) -> bool:
+        current_cycle = self.context.get("current_cycle", obj.group.current_cycle_number)
+        # Uses prefetched contributions — no extra query
+        return any(
+            c.cycle_number == current_cycle and c.is_verified
+            for c in obj.contributions.all()
+        )
+
+    def get_payout_position(self, obj: GroupMembership):
+        payout_map = self.context.get("payout_position_map", {})
+        return payout_map.get(obj.id)
+
+
+class GroupDetailSerializer(SavingsGroupSerializer):
+    """
+    Full transparency serializer for the group detail endpoint.
+
+    Extends SavingsGroupSerializer with member roster, cycle info, and
+    payout recipient data. Relies on the view's prefetch_related for
+    performance — do NOT use this serializer without the matching queryset.
+    """
+    members = serializers.SerializerMethodField()
+    current_cycle_number = serializers.IntegerField(read_only=True)
+    cycle_end_date = serializers.SerializerMethodField()
+    next_payout_recipient = serializers.SerializerMethodField()
+    previous_payout_recipient = serializers.SerializerMethodField()
+    contributed_user_ids = serializers.SerializerMethodField()
+    payout_amount = serializers.DecimalField(
+        source="total_pot_per_cycle",
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    payout_interval_days = serializers.IntegerField(read_only=True)
+
+    has_current_user_contributed = serializers.SerializerMethodField(
+        help_text=(
+            "True when the authenticated user has a verified contribution "
+            "for the current cycle in this group."
+        )
+    )
+
+    class Meta(SavingsGroupSerializer.Meta):
+        fields = SavingsGroupSerializer.Meta.fields + [
+            "members",
+            "current_cycle_number",
+            "cycle_end_date",
+            "next_payout_recipient",
+            "previous_payout_recipient",
+            "contributed_user_ids",
+            "payout_amount",
+            "payout_interval_days",
+            "has_current_user_contributed",
+        ]
+
+    def get_members(self, obj: SavingsGroup) -> list:
+        payout_map = {po.membership_id: po.position for po in obj.payout_orders.all()}
+        serializer = GroupMembershipDetailSerializer(
+            obj.memberships.all(),
+            many=True,
+            context={
+                **self.context,
+                "payout_position_map": payout_map,
+                "current_cycle": obj.current_cycle_number,
+            },
+        )
+        return serializer.data
+
+    def get_cycle_end_date(self, obj: SavingsGroup):
+        if obj.next_payout_date:
+            return obj.next_payout_date.isoformat()
+        return None
+
+    def _get_payout_recipient_at_position(self, obj: SavingsGroup, position: int) -> dict | None:
+        for po in obj.payout_orders.all():
+            if po.position == position:
+                u = po.membership.user
+                return {
+                    "user_id": u.id,
+                    "full_name": u.profile.full_name,
+                    "profile_picture": u.profile.profile_picture,
+                    "position": position,
+                }
+        return None
+
+    def get_next_payout_recipient(self, obj: SavingsGroup):
+        if not obj.start_date or obj.expected_members == 0:
+            return None
+        position = ((obj.current_cycle_number - 1) % obj.expected_members) + 1
+        return self._get_payout_recipient_at_position(obj, position)
+
+    def get_previous_payout_recipient(self, obj: SavingsGroup):
+        if obj.current_cycle_number <= 1 or obj.expected_members == 0:
+            return None
+        prev_cycle = obj.current_cycle_number - 1
+        position = ((prev_cycle - 1) % obj.expected_members) + 1
+        result = self._get_payout_recipient_at_position(obj, position)
+        if result:
+            result["cycle"] = prev_cycle
+        return result
+
+    def get_contributed_user_ids(self, obj: SavingsGroup) -> list[int]:
+        current_cycle = obj.current_cycle_number
+        user_ids = []
+        for membership in obj.memberships.all():
+            for contrib in membership.contributions.all():
+                if contrib.cycle_number == current_cycle and contrib.is_verified:
+                    user_ids.append(membership.user_id)
+                    break
+        return user_ids
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_has_current_user_contributed(self, obj: SavingsGroup) -> bool:
+        """
+        Scans prefetched membership + contribution data — zero extra queries.
+        Returns True when the requesting user has a verified contribution for
+        the current cycle.
+        """
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+
+        current_cycle = obj.current_cycle_number
+        current_user_id = request.user.id
+
+        for membership in obj.memberships.all():
+            if membership.user_id != current_user_id:
+                continue
+            return any(
+                c.cycle_number == current_cycle and c.is_verified
+                for c in membership.contributions.all()
+            )
+
+        return False
