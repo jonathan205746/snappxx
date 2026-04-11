@@ -25,7 +25,7 @@ urlpatterns = [
     path('analytics/', AnalyticsView.as_view(), name='analytics'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
 
-    # Groups
+    # Groups — list / create
     path('groups/create/', CreateSavingsGroupView.as_view(), name='create-savings-group'),
     path('groups/my-joined/', MyJoinedGroupsListView.as_view(), name='my-joined-groups'),
     path('groups/all/', AllGroupsListView.as_view(), name='all-groups'),
@@ -34,26 +34,25 @@ urlpatterns = [
     path('groups/stats/', GroupsStatsView.as_view(), name='groups-stats'),
     path('groups/join-requests/stats/', JoinRequestsStatsView.as_view(), name='join-requests-stats'),
 
-    # Join request actions
+    # Join request actions (numeric PK on the request row, not the group)
     path('groups/requests/<int:pk>/action/', GroupRequestActionView.as_view(), name='group-request-action'),
 
-    # Invite link management (admin: GET to fetch, POST to regenerate)
+    # Invite link management — must be before the generic <str:public_id> catch-all
     path('groups/<str:group_id>/invite/', GroupInviteLinkView.as_view(), name='group-invite-link'),
 
     # ── Invite public endpoints ──────────────────────────────────────────────
-    # Public preview (no auth required)
     path('invite/<str:token>/', InvitePreviewView.as_view(), name='invite-preview'),
-    # Auto-join via invite token (auth required)
     path('invite/<str:token>/accept/', InviteAcceptView.as_view(), name='invite-accept'),
     # ────────────────────────────────────────────────────────────────────────
 
-    # Dynamic group detail (public_id or legacy numeric pk)
-    path('groups/<str:public_id>/', GroupDetailView.as_view(), name='group-detail'),
-
-    # Group-scoped actions
-    path('groups/<int:group_id>/request_join/', GroupJoinRequestView.as_view(), name='group-request-join'),
+    path('groups/<str:group_id>/request_join/', GroupJoinRequestView.as_view(), name='group-request-join'),
     path('groups/<int:group_id>/requests/', GroupRequestsListView.as_view(), name='group-requests-list'),
-    path('groups/<int:group_id>/contribute/', ContributeView.as_view(), name='group-contribute'),
+
+    # KEY FIX: was <int:group_id>; now <str:group_id> so public_id strings are accepted.
+    path('groups/<str:group_id>/contribute/', ContributeView.as_view(), name='group-contribute'),
+
+    # Dynamic group detail (public_id or legacy numeric pk) — generic catch-all last
+    path('groups/<str:public_id>/', GroupDetailView.as_view(), name='group-detail'),
 
     # Goals
     path('goals/create/', CreateSavingsGoalView.as_view(), name='create-savings-goal'),
