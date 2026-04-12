@@ -1,6 +1,7 @@
 # accounts/views.py
 
 import uuid
+import os as _os
 import hashlib
 import logging
 import html
@@ -42,7 +43,6 @@ from rest_framework.views import APIView
 from rest_framework import generics, status, permissions
 from .permissions import IsGroupAdmin, IsGoalOwner
 from django.utils import timezone
-# from django.db.models import Sum, F, Q
 from django.db.models import Prefetch, Sum, F, Q
 from dateutil.relativedelta import relativedelta
 import phonenumbers
@@ -73,6 +73,42 @@ finance_logger = logging.getLogger("accounts.finance")
 
 User = get_user_model()
 
+
+PROFILE_PIC_MAX_BYTES             = 5 * 1024 * 1024        # 5 MB
+PROFILE_PIC_ALLOWED_CONTENT_TYPES = frozenset({"image/jpeg", "image/png"})
+PROFILE_PIC_ALLOWED_EXTENSIONS    = frozenset({".jpg", ".jpeg", ".png"})
+
+
+def _validate_profile_picture(file) -> "str | None":
+    """
+    Validates an uploaded profile picture InMemoryUploadedFile.
+
+    Checks (defence-in-depth):
+      1. File extension  — catches accidents and common spoofs
+      2. Content-type   — browser-reported MIME type
+      3. File size      — blocks image bombs and oversized uploads
+
+    Returns an error message string on failure, or None on success.
+    The Cloudinary upload that follows is the authoritative format gate;
+    these checks are a fast-fail before any network call is made.
+    """
+    ext = _os.path.splitext(file.name)[1].lower()
+
+    if ext not in PROFILE_PIC_ALLOWED_EXTENSIONS:
+        return "Profile picture must be a JPG or PNG file."
+
+    # content_type is set by Django's MultiPartParser from the browser's
+    # Content-Disposition header — not cryptographically trustworthy but
+    # sufficient for defence-in-depth alongside the extension check.
+    content_type = getattr(file, "content_type", "") or ""
+    if content_type not in PROFILE_PIC_ALLOWED_CONTENT_TYPES:
+        return "Profile picture must be a JPG or PNG file."
+
+    if file.size > PROFILE_PIC_MAX_BYTES:
+        mb = file.size / (1024 * 1024)
+        return f"Profile picture is too large ({mb:.1f} MB). Maximum allowed size is 5 MB."
+
+    return None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AUTH VIEWS
@@ -424,8 +460,8 @@ class VerifyOTPView(APIView):
         201: {
             "type": "object",
             "properties": {
-                "message": {"type": "string"},
-                "phone": {"type": "string"},
+                "message":   {"type": "string"},
+                "phone":     {"type": "string"},
                 "next_step": {"type": "string"},
             },
         },
@@ -460,7 +496,45 @@ class FullSignupView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        email = data["email"].lower().strip()
+        # ── Date of birth validation ──────────────────────────────────────────
+        # Must be in the past; user must be at least 13 years old.
+        # We parse explicitly here so the error message is user-friendly
+        # rather than a Django ValidationError stack trace.
+        import datetime as _dt
+        try:
+            dob = _dt.date.fromisoformat(str(data["date_of_birth"]))
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Date of birth is invalid. Please use YYYY-MM-DD format."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        today = timezone.now().date()
+
+        if dob >= today:
+            return Response(
+                {"error": "Date of birth must be in the past."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        _MIN_AGE = 13
+        # Compute the calendar date on which the user turns _MIN_AGE today.
+        # Using replace(year=...) correctly handles leap-year birthdays.
+        try:
+            age_cutoff = today.replace(year=today.year - _MIN_AGE)
+        except ValueError:
+            # today is Feb 29 on a leap year and (today.year - _MIN_AGE) is not
+            # a leap year — fall back to Feb 28 of that year.
+            age_cutoff = today.replace(year=today.year - _MIN_AGE, day=28)
+
+        if dob > age_cutoff:
+            return Response(
+                {"error": f"You must be at least {_MIN_AGE} years old to register."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
+        email      = data["email"].lower().strip()
         momo_number = str(data["momo_number"]).strip()
 
         if User.objects.filter(email=email).exists():
@@ -477,11 +551,19 @@ class FullSignupView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Profile picture: validate before uploading
         profile_picture_url = None
         if "profile_picture" in request.FILES:
+            pic_file = request.FILES["profile_picture"]
+            validation_error = _validate_profile_picture(pic_file)
+            if validation_error:
+                return Response(
+                    {"error": validation_error},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             try:
                 upload_result = cloudinary.uploader.upload(
-                    request.FILES["profile_picture"],
+                    pic_file,
                     folder="snappx/profiles/",
                     transformation=[
                         {"width": 500, "height": 500, "crop": "limit"},
@@ -552,10 +634,10 @@ class FullSignupView(APIView):
                 })
                 return Response(
                     {
-                        "message": "Account created successfully! However, we could not send your OTP right now.",
-                        "phone": momo_number,
+                        "message":   "Account created successfully! However, we could not send your OTP right now.",
+                        "phone":     momo_number,
                         "next_step": "verify_otp",
-                        "warning": "Please use the 'Resend OTP' option on the verification screen.",
+                        "warning":   "Please use the 'Resend OTP' option on the verification screen.",
                     },
                     status=status.HTTP_201_CREATED,
                 )
@@ -563,25 +645,25 @@ class FullSignupView(APIView):
             finance_logger.error(f"OTP task exception during signup for user {user.id}: {e}")
             return Response(
                 {
-                    "message": "Account created successfully! However, we could not send your OTP right now.",
-                    "phone": momo_number,
+                    "message":   "Account created successfully! However, we could not send your OTP right now.",
+                    "phone":     momo_number,
                     "next_step": "verify_otp",
-                    "warning": "Please use the 'Resend OTP' option on the verification screen.",
+                    "warning":   "Please use the 'Resend OTP' option on the verification screen.",
                 },
                 status=status.HTTP_201_CREATED,
             )
 
         finance_logger.info({
-            "event": "user_registered",
-            "user_id": user.id,
-            "momo_mask": f"***-{momo_number[-4:]}",
+            "event":              "user_registered",
+            "user_id":            user.id,
+            "momo_mask":          f"***-{momo_number[-4:]}",
             "wallet_initialized": True,
         })
 
         return Response(
             {
-                "message": "Account created successfully! OTP sent.",
-                "phone": momo_number,
+                "message":   "Account created successfully! OTP sent.",
+                "phone":     momo_number,
                 "next_step": "verify_otp",
             },
             status=status.HTTP_201_CREATED,
@@ -602,13 +684,8 @@ ALLOWED_PROFILE_FIELDS = frozenset({
     "momo_name",
 })
 
-# Any change to ANY of these fields requires OTP verification.
-# This prevents:
-#   - Redirecting payouts by changing momo_provider alone (e.g. MTN → Telecel)
-#   - Redirecting payouts by changing momo_name (Paystack recipient name)
-#   - Obviously redirecting payouts by changing momo_number
-MOMO_GATED_FIELDS = frozenset({"momo_number", "momo_name", "momo_provider"})
 
+MOMO_GATED_FIELDS = frozenset({"momo_number", "momo_name", "momo_provider"})
 
 @extend_schema(
     request=inline_serializer(
@@ -2509,6 +2586,7 @@ class ScheduledContributionsView(APIView):
 # INVITE LINKS
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class GroupInviteLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -2540,6 +2618,14 @@ class GroupInviteLinkView(APIView):
         group, err = self._resolve_group_and_check_access(request, group_id)
         if err:
             return err
+
+        # Suspended groups do not expose invite links to anyone.
+        if group.status == "suspended":
+            return Response(
+                {"error": "Invite links are disabled for suspended groups."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         invite, _ = GroupInviteLink.objects.get_or_create(
             group=group,
             defaults={"created_by": request.user, "is_active": True},
@@ -2561,6 +2647,14 @@ class GroupInviteLinkView(APIView):
                 {"error": "Group not found or you are not the admin."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        # Admins of suspended groups may not regenerate invite links.
+        if group.status == "suspended":
+            return Response(
+                {"error": "Invite links cannot be regenerated while this group is suspended."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         invite, _ = GroupInviteLink.objects.get_or_create(
             group=group, defaults={"created_by": request.user}
         )
@@ -2579,6 +2673,77 @@ class GroupInviteLinkView(APIView):
             "invite_url": f"{frontend_url}/invite/{invite.token}",
             "message": "Invite link regenerated. Previous links are now invalid.",
         })
+
+# class GroupInviteLinkView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def _get_group(self, group_id_str: str):
+#         from rest_framework.exceptions import NotFound
+#         group = SavingsGroup.objects.filter(public_id=group_id_str).first()
+#         if group:
+#             return group
+#         if str(group_id_str).isdigit():
+#             group = SavingsGroup.objects.filter(id=int(group_id_str)).first()
+#             if group:
+#                 return group
+#         raise NotFound({"error": "Group not found."})
+
+#     def _resolve_group_and_check_access(self, request, group_id):
+#         group = self._get_group(str(group_id))
+#         is_admin = group.admin_id == request.user.id
+#         is_member = GroupMembership.objects.filter(
+#             user=request.user, group=group
+#         ).exists()
+#         if not is_admin and not is_member:
+#             return None, Response(
+#                 {"error": "You must be a member of this group."},
+#                 status=status.HTTP_403_FORBIDDEN,
+#             )
+#         return group, None
+
+#     def get(self, request, group_id):
+#         group, err = self._resolve_group_and_check_access(request, group_id)
+#         if err:
+#             return err
+#         invite, _ = GroupInviteLink.objects.get_or_create(
+#             group=group,
+#             defaults={"created_by": request.user, "is_active": True},
+#         )
+#         frontend_url = getattr(settings, "FRONTEND_URL", settings.SITE_URL)
+#         return Response({
+#             "token": invite.token,
+#             "invite_url": f"{frontend_url}/invite/{invite.token}",
+#             "is_active": invite.is_active,
+#             "click_count": invite.click_count,
+#             "created_at": invite.created_at.isoformat(),
+#         })
+
+#     def post(self, request, group_id):
+#         import secrets as _secrets
+#         group = self._get_group(str(group_id))
+#         if group.admin_id != request.user.id:
+#             return Response(
+#                 {"error": "Group not found or you are not the admin."},
+#                 status=status.HTTP_403_FORBIDDEN,
+#             )
+#         invite, _ = GroupInviteLink.objects.get_or_create(
+#             group=group, defaults={"created_by": request.user}
+#         )
+#         invite.token = _secrets.token_urlsafe(32)
+#         invite.is_active = True
+#         invite.save(update_fields=["token", "is_active", "updated_at"])
+
+#         frontend_url = getattr(settings, "FRONTEND_URL", settings.SITE_URL)
+#         finance_logger.info({
+#             "event": "invite_link_regenerated",
+#             "admin_id": request.user.id,
+#             "group_id": group.id,
+#         })
+#         return Response({
+#             "token": invite.token,
+#             "invite_url": f"{frontend_url}/invite/{invite.token}",
+#             "message": "Invite link regenerated. Previous links are now invalid.",
+#         })
 
 
 class InvitePreviewView(APIView):
