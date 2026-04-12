@@ -16,6 +16,7 @@ from .models import (
     GroupJoinRequest,
     GroupMembership,
     PaystackTransaction,
+    BotGroupLink
 )
 
 @admin.register(GroupAdminKYC)
@@ -193,4 +194,19 @@ class PaystackTransactionAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(BotGroupLink)
+class BotGroupLinkAdmin(admin.ModelAdmin):
+    list_display = [
+        'group', 'platform', 'linked_by', 'is_active', 'linked_at', 'last_activity'
+    ]
+    list_filter = ['platform', 'is_active', 'linked_at']
+    search_fields = ['group__group_name', 'linked_by__email']
+    readonly_fields = ['group', 'platform', 'linked_by', 'linked_at']
+    ordering = ['-linked_at']
+
+    def has_add_permission(self, request):
+        # Links are created only via the API flow
         return False

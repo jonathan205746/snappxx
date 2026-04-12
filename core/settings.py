@@ -356,6 +356,9 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+TELEGRAM_BOT_TOKEN = config("TELEGRAM_BOT_TOKEN", default=None)
+TELEGRAM_WEBHOOK_SECRET = config("TELEGRAM_WEBHOOK_SECRET", default=None)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EMAIL
 # ─────────────────────────────────────────────────────────────────────────────

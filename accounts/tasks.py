@@ -400,6 +400,13 @@ def execute_group_payout(group_id: int):
             NotificationService.notify_payout_received(
                 beneficiary, group, total_pot, current_cycle
             )
+            from .bot_tasks import send_telegram_payout_announcement
+            send_telegram_payout_announcement.delay(
+                group.id,
+                current_cycle,
+                beneficiary_profile.full_name,
+                f"{total_pot:,.2f}",
+            )
 
             logger.info({
                 "event": "group_payout_executed",

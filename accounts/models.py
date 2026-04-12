@@ -964,3 +964,74 @@ class PaystackTransaction(models.Model):
             f"[{self.transaction_type.upper()}] {self.reference} "
             f"— ₵{self.amount} ({self.status})"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BOT INTEGRATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BotGroupLink(models.Model):
+    """
+    Records that a SavingsGroup has been linked to an external messaging bot.
+
+    Two-step activation for Telegram:
+      Step 1 — Admin generates a link code on the Bot Integration page and
+               submits it → record is created with telegram_chat_id=None.
+      Step 2 — Admin adds the bot to their Telegram group and sends /start
+               → webhook fires, assigns telegram_chat_id, link becomes active.
+
+    is_active=True AND telegram_chat_id is not None = fully operational.
+    is_active=True AND telegram_chat_id is None     = pending activation.
+    """
+
+    PLATFORM_CHOICES = (
+        ("whatsapp", "WhatsApp"),
+        ("telegram", "Telegram"),
+    )
+
+    group = models.ForeignKey(
+        "SavingsGroup",
+        on_delete=models.CASCADE,
+        related_name="bot_links",
+    )
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, db_index=True)
+    linked_at = models.DateTimeField(auto_now_add=True)
+    linked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bot_links_created",
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    # Telegram group chat ID — negative integer stored as string.
+    # Assigned by the webhook when the bot receives /start in the group.
+    # Null until that happens.
+    telegram_chat_id = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "Telegram chat ID for the connected group chat. "
+            "Set automatically when the bot receives /start in the group."
+        ),
+    )
+
+    last_activity = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last time the bot posted in this chat.",
+    )
+
+    class Meta:
+        unique_together = ("group", "platform")
+        verbose_name = "Bot Group Link"
+        verbose_name_plural = "Bot Group Links"
+        ordering = ["-linked_at"]
+
+    def __str__(self):
+        flag = "active" if self.is_active else "inactive"
+        pending = " [pending /start]" if self.is_active and not self.telegram_chat_id and self.platform == "telegram" else ""
+        return f"{self.group.group_name} ↔ {self.platform} [{flag}]{pending}"
