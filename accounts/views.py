@@ -1349,6 +1349,19 @@ class GroupRequestActionView(APIView):
                         request.user, request_obj.user, group
                     )
                 )
+                from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
+                _new_user_name = request_obj.user.profile.full_name
+                _gid = group.id
+                transaction.on_commit(
+                    lambda: send_telegram_new_member.delay(_gid, _new_user_name)
+                )
+
+                # If this approval also activated the group, fire the activated message too.
+                # (is_activating is already computed in the existing code — reuse it)
+                if is_activating:
+                    transaction.on_commit(
+                        lambda: send_telegram_group_activated.delay(_gid)
+                    )
 
                 message = "User approved and added to the group."
                 is_activating = False
@@ -1767,6 +1780,12 @@ class ContributeView(APIView):
 
         contribution.is_verified = True
         contribution.save(update_fields=["is_verified"])
+
+        from .bot_tasks import send_telegram_contribution_update
+        _contrib_gid = group.id
+        transaction.on_commit(
+            lambda: send_telegram_contribution_update.delay(_contrib_gid)
+        )
 
         wallet = Wallet.objects.get(user=request.user)
         wallet.refresh_from_db()
@@ -2880,6 +2899,16 @@ class InviteAcceptView(APIView):
                 finance_logger.error(f"[InviteAcceptView] Notification error: {exc}")
 
         transaction.on_commit(_notify)
+        from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
+        _inv_user_name = user.profile.full_name
+        _inv_gid = group.id
+        transaction.on_commit(
+            lambda: send_telegram_new_member.delay(_inv_gid, _inv_user_name)
+        )
+        if is_activating:
+            transaction.on_commit(
+                lambda: send_telegram_group_activated.delay(_inv_gid)
+            )
 
         is_activating = (
             group.current_members >= group.expected_members and not group.start_date
@@ -3198,3 +3227,15 @@ def run_sync_pending_transfers(request):
     from .tasks import sync_pending_transfers
     sync_pending_transfers.delay()
     return JsonResponse({"status": "sync_pending_transfers queued"})
+
+
+@csrf_exempt
+@ratelimit(key="ip", rate="6/m", block=True)
+def run_contribution_reminders(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    if request.headers.get("X-Cron-Secret") != settings.QSTASH_TOKEN:
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+    from .bot_tasks import broadcast_contribution_reminders
+    broadcast_contribution_reminders.delay()
+    return JsonResponse({"status": "contribution reminders queued"})
