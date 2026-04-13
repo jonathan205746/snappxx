@@ -563,61 +563,136 @@ class TelegramWebhookView(APIView):
             self._handle_bot_removed(update["my_chat_member"])
             return
 
-    def _handle_start(self, message: dict):
-        """
-        /start is sent when the bot is activated in a group or private chat.
+    # def _handle_start(self, message: dict):
+    #     """
+    #     /start is sent when the bot is activated in a group or private chat.
 
-        When an admin adds the bot to a Telegram group and sends /start, we:
-        1. Extract the chat_id from the message
-        2. Look up the pending BotGroupLink for this group
-        3. Assign the chat_id, making the link fully active
-        4. Send a welcome message
-        """
+    #     When an admin adds the bot to a Telegram group and sends /start, we:
+    #     1. Extract the chat_id from the message
+    #     2. Look up the pending BotGroupLink for this group
+    #     3. Assign the chat_id, making the link fully active
+    #     4. Send a welcome message
+    #     """
+    #     chat = message.get("chat", {})
+    #     chat_id = str(chat.get("id", ""))
+    #     chat_type = chat.get("type", "")  # "group", "supergroup", "private"
+
+    #     if not chat_id:
+    #         return
+
+    #     # Only handle group/supergroup chats — not private messages to the bot
+    #     if chat_type not in ("group", "supergroup"):
+    #         logger.info({
+    #             "event": "telegram_start_in_private_chat",
+    #             "chat_id": chat_id,
+    #         })
+    #         return
+
+    #     # Find a BotGroupLink that is pending chat_id assignment for this chat.
+    #     # We match by looking for any telegram link without a chat_id.
+    #     # In practice, admins link one group at a time, so there's rarely ambiguity.
+    #     # A more robust approach (future): embed the group_id in the /start payload.
+    #     pending_links = BotGroupLink.objects.filter(
+    #         platform="telegram",
+    #         is_active=True,
+    #         telegram_chat_id__isnull=True,
+    #     ).select_related("group")
+
+    #     if not pending_links.exists():
+    #         logger.info({
+    #             "event": "telegram_start_no_pending_link",
+    #             "chat_id": chat_id,
+    #         })
+    #         return
+
+    #     # Assign chat_id to the most recently created pending link
+    #     link = pending_links.order_by("-linked_at").first()
+    #     link.telegram_chat_id = chat_id
+    #     link.last_activity = timezone.now()
+    #     link.save(update_fields=["telegram_chat_id", "last_activity"])
+
+    #     logger.info({
+    #         "event": "telegram_chat_id_assigned",
+    #         "group_id": link.group_id,
+    #         "chat_id": chat_id,
+    #     })
+
+    #     # Send welcome message directly in the webhook handler
+    #     from .telegram import TelegramError, fmt_welcome, send_message
+    #     try:
+    #         frontend_url = getattr(settings, "FRONTEND_URL", "https://www.snappx.app")
+    #         dashboard_url = f"{frontend_url}/groups/{link.group.public_id or str(link.group_id)}"
+    #         text = fmt_welcome(
+    #             group_name=link.group.group_name,
+    #             platform="telegram",
+    #             dashboard_url=dashboard_url,
+    #         )
+    #         send_message(chat_id, text)
+    #         logger.info({
+    #             "event": "telegram_welcome_sent",
+    #             "group_id": link.group_id,
+    #             "chat_id": chat_id,
+    #         })
+    #     except TelegramError as exc:
+    #         logger.error({
+    #             "event": "telegram_welcome_failed",
+    #             "group_id": link.group_id,
+    #             "error": str(exc),
+    #         })
+
+
+    def _handle_start(self, message: dict):
         chat = message.get("chat", {})
         chat_id = str(chat.get("id", ""))
-        chat_type = chat.get("type", "")  # "group", "supergroup", "private"
+        chat_type = chat.get("type", "")
+
+        logger.warning({
+            "event": "telegram_start_received",
+            "chat_id": chat_id,
+            "chat_type": chat_type,
+            "message": str(message)[:200],
+        })
 
         if not chat_id:
+            logger.warning({"event": "telegram_start_no_chat_id"})
             return
 
-        # Only handle group/supergroup chats — not private messages to the bot
         if chat_type not in ("group", "supergroup"):
-            logger.info({
-                "event": "telegram_start_in_private_chat",
-                "chat_id": chat_id,
+            logger.warning({
+                "event": "telegram_start_wrong_chat_type",
+                "chat_type": chat_type,
             })
             return
 
-        # Find a BotGroupLink that is pending chat_id assignment for this chat.
-        # We match by looking for any telegram link without a chat_id.
-        # In practice, admins link one group at a time, so there's rarely ambiguity.
-        # A more robust approach (future): embed the group_id in the /start payload.
         pending_links = BotGroupLink.objects.filter(
             platform="telegram",
             is_active=True,
             telegram_chat_id__isnull=True,
         ).select_related("group")
 
+        logger.warning({
+            "event": "telegram_pending_links_count",
+            "count": pending_links.count(),
+        })
+
         if not pending_links.exists():
-            logger.info({
+            logger.warning({
                 "event": "telegram_start_no_pending_link",
                 "chat_id": chat_id,
             })
             return
 
-        # Assign chat_id to the most recently created pending link
         link = pending_links.order_by("-linked_at").first()
         link.telegram_chat_id = chat_id
         link.last_activity = timezone.now()
         link.save(update_fields=["telegram_chat_id", "last_activity"])
 
-        logger.info({
+        logger.warning({
             "event": "telegram_chat_id_assigned",
             "group_id": link.group_id,
             "chat_id": chat_id,
         })
 
-        # Send welcome message directly in the webhook handler
         from .telegram import TelegramError, fmt_welcome, send_message
         try:
             frontend_url = getattr(settings, "FRONTEND_URL", "https://www.snappx.app")
@@ -627,17 +702,29 @@ class TelegramWebhookView(APIView):
                 platform="telegram",
                 dashboard_url=dashboard_url,
             )
+            logger.warning({
+                "event": "telegram_welcome_attempting",
+                "chat_id": chat_id,
+                "text_length": len(text),
+            })
             send_message(chat_id, text)
-            logger.info({
-                "event": "telegram_welcome_sent",
-                "group_id": link.group_id,
+            logger.warning({
+                "event": "telegram_welcome_sent_success",
                 "chat_id": chat_id,
             })
         except TelegramError as exc:
-            logger.error({
+            logger.warning({
                 "event": "telegram_welcome_failed",
                 "group_id": link.group_id,
                 "error": str(exc),
+                "error_code": exc.error_code,
+                "raw": str(exc.raw),
+            })
+        except Exception as exc:
+            logger.warning({
+                "event": "telegram_welcome_unexpected",
+                "error": str(exc),
+                "type": type(exc).__name__,
             })
 
     def _handle_bot_removed(self, my_chat_member: dict):
