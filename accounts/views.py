@@ -1402,6 +1402,19 @@ class GroupRequestActionView(APIView):
                     lambda: send_group_join_response_email_async.delay(pk, "approved")
                 )
 
+                # Bot notifications
+                from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
+                _new_user_name = request_obj.user.profile.full_name
+                _gid = group.id
+                _is_activating = is_activating  # capture locally before leaving scope
+                transaction.on_commit(
+                    lambda: send_telegram_new_member.delay(_gid, _new_user_name)
+                )
+                if _is_activating:
+                    transaction.on_commit(
+                        lambda: send_telegram_group_activated.delay(_gid)
+                    )
+
             except IntegrityError:
                 return Response(
                     {"error": "User is already a member or a conflict occurred."},
