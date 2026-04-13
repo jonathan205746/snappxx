@@ -1286,6 +1286,164 @@ class GroupRequestsListView(generics.ListAPIView):
         ).select_related("user__profile", "group")
 
 
+# @extend_schema(
+#     request=GroupJoinActionSerializer,
+#     responses={200: {"description": "Request handled successfully."}},
+#     description="Group Admin approves or rejects a pending join request.",
+#     tags=["Savings Groups"],
+# )
+# class GroupRequestActionView(APIView):
+#     permission_classes = [IsAuthenticated, IsGroupAdmin]
+
+#     @transaction.atomic
+#     def post(self, request, pk):
+#         try:
+#             request_obj = GroupJoinRequest.objects.select_for_update(
+#                 of=("self",)
+#             ).select_related("group__admin", "user__profile").get(pk=pk)
+#         except GroupJoinRequest.DoesNotExist:
+#             return Response(
+#                 {"error": "Join request not found."}, status=status.HTTP_404_NOT_FOUND
+#             )
+
+#         if request_obj.group.admin != request.user:
+#             return Response(
+#                 {"detail": "You are not authorized to handle this request."},
+#                 status=status.HTTP_403_FORBIDDEN,
+#             )
+
+#         if request_obj.status != "pending":
+#             return Response(
+#                 {"error": f"Request is already {request_obj.status}."},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         serializer = GroupJoinActionSerializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+#         action = serializer.validated_data["action"]
+
+#         group = SavingsGroup.objects.select_for_update().get(id=request_obj.group.id)
+
+#         if action == "approve":
+#             if group.current_members >= group.expected_members:
+#                 return Response(
+#                     {"error": "Cannot approve. Group is already full."},
+#                     status=status.HTTP_400_BAD_REQUEST,
+#                 )
+
+#             try:
+#                 GroupMembership.objects.create(user=request_obj.user, group=group)
+#                 group.current_members += 1
+#                 group.save(update_fields=["current_members"])
+
+#                 request_obj.status = "approved"
+#                 request_obj.handled_by = request.user
+#                 request_obj.handled_at = timezone.now()
+#                 request_obj.save(update_fields=["status", "handled_by", "handled_at"])
+
+#                 transaction.on_commit(
+#                     lambda: NotificationService.notify_join_approved(request_obj)
+#                 )
+#                 transaction.on_commit(
+#                     lambda: NotificationService.notify_new_member(
+#                         request.user, request_obj.user, group
+#                     )
+#                 )
+#                 from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
+#                 _new_user_name = request_obj.user.profile.full_name
+#                 _gid = group.id
+#                 transaction.on_commit(
+#                     lambda: send_telegram_new_member.delay(_gid, _new_user_name)
+#                 )
+
+#                 # If this approval also activated the group, fire the activated message too.
+#                 # (is_activating is already computed in the existing code — reuse it)
+#                 if is_activating:
+#                     transaction.on_commit(
+#                         lambda: send_telegram_group_activated.delay(_gid)
+#                     )
+
+#                 message = "User approved and added to the group."
+#                 is_activating = False
+
+#                 if group.current_members >= group.expected_members and not group.start_date:
+#                     is_activating = True
+#                     group.start_date = timezone.now().date()
+#                     group.save(update_fields=["start_date"])
+#                     PayoutOrder.objects.filter(group=group).delete()
+#                     memberships = GroupMembership.objects.filter(
+#                         group=group
+#                     ).order_by("joined_at")
+#                     PayoutOrder.objects.bulk_create([
+#                         PayoutOrder(group=group, membership=m, position=idx)
+#                         for idx, m in enumerate(memberships, start=1)
+#                     ])
+#                     message += " Group is now full and payout cycles have been initialized."
+#                     transaction.on_commit(
+#                         lambda: NotificationService.notify_group_activated(group)
+#                     )
+
+#                 transaction.on_commit(lambda: finance_logger.info({
+#                     "event": "group_join_approved",
+#                     "admin_id": request.user.id,
+#                     "target_user_id": request_obj.user.id,
+#                     "group_id": group.id,
+#                     "request_id": getattr(request, "request_id", None),
+#                 }))
+
+#                 if is_activating:
+#                     transaction.on_commit(lambda: finance_logger.info({
+#                         "event": "group_activated",
+#                         "group_id": group.id,
+#                         "start_date": str(group.start_date),
+#                     }))
+
+#                 transaction.on_commit(
+#                     lambda: send_group_join_response_email_async.delay(pk, "approved")
+#                 )
+
+#                 # Bot notifications
+#                 from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
+#                 _new_user_name = request_obj.user.profile.full_name
+#                 _gid = group.id
+#                 _is_activating = is_activating  # capture locally before leaving scope
+#                 transaction.on_commit(
+#                     lambda: send_telegram_new_member.delay(_gid, _new_user_name)
+#                 )
+#                 if _is_activating:
+#                     transaction.on_commit(
+#                         lambda: send_telegram_group_activated.delay(_gid)
+#                     )
+
+#             except IntegrityError:
+#                 return Response(
+#                     {"error": "User is already a member or a conflict occurred."},
+#                     status=status.HTTP_400_BAD_REQUEST,
+#                 )
+
+#         elif action == "reject":
+#             request_obj.status = "rejected"
+#             request_obj.handled_by = request.user
+#             request_obj.handled_at = timezone.now()
+#             request_obj.save(update_fields=["status", "handled_by", "handled_at"])
+
+#             transaction.on_commit(
+#                 lambda: NotificationService.notify_join_rejected(request_obj)
+#             )
+#             transaction.on_commit(lambda: finance_logger.info({
+#                 "event": "group_join_rejected",
+#                 "admin_id": request.user.id,
+#                 "target_user_id": request_obj.user.id,
+#                 "group_id": group.id,
+#             }))
+#             transaction.on_commit(
+#                 lambda: send_group_join_response_email_async.delay(pk, "rejected")
+#             )
+#             message = "User request has been rejected."
+
+#         return Response({"message": message}, status=status.HTTP_200_OK)
+
+
 @extend_schema(
     request=GroupJoinActionSerializer,
     responses={200: {"description": "Request handled successfully."}},
@@ -1349,25 +1507,16 @@ class GroupRequestActionView(APIView):
                         request.user, request_obj.user, group
                     )
                 )
-                from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
-                _new_user_name = request_obj.user.profile.full_name
-                _gid = group.id
-                transaction.on_commit(
-                    lambda: send_telegram_new_member.delay(_gid, _new_user_name)
-                )
-
-                # If this approval also activated the group, fire the activated message too.
-                # (is_activating is already computed in the existing code — reuse it)
-                if is_activating:
-                    transaction.on_commit(
-                        lambda: send_telegram_group_activated.delay(_gid)
-                    )
 
                 message = "User approved and added to the group."
-                is_activating = False
 
-                if group.current_members >= group.expected_members and not group.start_date:
-                    is_activating = True
+                # ── Determine activation BEFORE any lambdas that read it ──────
+                is_activating = (
+                    group.current_members >= group.expected_members
+                    and not group.start_date
+                )
+
+                if is_activating:
                     group.start_date = timezone.now().date()
                     group.save(update_fields=["start_date"])
                     PayoutOrder.objects.filter(group=group).delete()
@@ -1381,6 +1530,20 @@ class GroupRequestActionView(APIView):
                     message += " Group is now full and payout cycles have been initialized."
                     transaction.on_commit(
                         lambda: NotificationService.notify_group_activated(group)
+                    )
+
+                # ── Bot notifications (single block, after is_activating is set) ──
+                from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
+                _new_user_name = request_obj.user.profile.full_name
+                _gid = group.id
+                _is_activating = is_activating  # capture for lambda closure
+
+                transaction.on_commit(
+                    lambda: send_telegram_new_member.delay(_gid, _new_user_name)
+                )
+                if _is_activating:
+                    transaction.on_commit(
+                        lambda: send_telegram_group_activated.delay(_gid)
                     )
 
                 transaction.on_commit(lambda: finance_logger.info({
@@ -1401,19 +1564,6 @@ class GroupRequestActionView(APIView):
                 transaction.on_commit(
                     lambda: send_group_join_response_email_async.delay(pk, "approved")
                 )
-
-                # Bot notifications
-                from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
-                _new_user_name = request_obj.user.profile.full_name
-                _gid = group.id
-                _is_activating = is_activating  # capture locally before leaving scope
-                transaction.on_commit(
-                    lambda: send_telegram_new_member.delay(_gid, _new_user_name)
-                )
-                if _is_activating:
-                    transaction.on_commit(
-                        lambda: send_telegram_group_activated.delay(_gid)
-                    )
 
             except IntegrityError:
                 return Response(
@@ -1442,7 +1592,6 @@ class GroupRequestActionView(APIView):
             message = "User request has been rejected."
 
         return Response({"message": message}, status=status.HTTP_200_OK)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD
@@ -2816,6 +2965,147 @@ class InvitePreviewView(APIView):
         })
 
 
+# class InviteAcceptView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     @transaction.atomic
+#     def post(self, request, token):
+#         try:
+#             invite = GroupInviteLink.objects.select_related(
+#                 "group__admin__profile"
+#             ).get(token=token, is_active=True)
+#         except GroupInviteLink.DoesNotExist:
+#             return Response(
+#                 {"error": "This invite link is invalid or has expired."},
+#                 status=status.HTTP_404_NOT_FOUND,
+#             )
+
+#         group = SavingsGroup.objects.select_for_update().get(pk=invite.group_id)
+#         user = request.user
+
+#         if group.admin_id == user.id:
+#             return Response({
+#                 "already_member": True,
+#                 "message": "You are the admin of this group.",
+#                 "group_public_id": group.public_id,
+#                 "group_id": group.id,
+#                 "group_name": group.group_name,
+#             }, status=status.HTTP_200_OK)
+
+#         if GroupMembership.objects.filter(user=user, group=group).exists():
+#             return Response({
+#                 "already_member": True,
+#                 "message": "You are already a member of this group.",
+#                 "group_public_id": group.public_id,
+#                 "group_id": group.id,
+#                 "group_name": group.group_name,
+#             }, status=status.HTTP_200_OK)
+
+#         if group.current_members >= group.expected_members:
+#             return Response(
+#                 {"error": "Sorry, this group is already full."},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         if group.status not in ("pending", "active"):
+#             return Response(
+#                 {"error": "This group is not currently accepting new members."},
+#                 status=status.HTTP_400_BAD_REQUEST,
+#             )
+
+#         try:
+#             GroupMembership.objects.create(user=user, group=group)
+#         except IntegrityError:
+#             return Response({
+#                 "already_member": True,
+#                 "message": "You are already a member of this group.",
+#                 "group_public_id": group.public_id,
+#                 "group_id": group.id,
+#                 "group_name": group.group_name,
+#             }, status=status.HTTP_200_OK)
+
+#         group.current_members += 1
+#         group.save(update_fields=["current_members"])
+
+#         GroupJoinRequest.objects.filter(
+#             user=user, group=group, status="pending"
+#         ).update(
+#             status="approved",
+#             handled_at=timezone.now(),
+#             handled_by=group.admin,
+#         )
+
+#         _group = group
+#         _user = user
+
+#         def _notify():
+#             try:
+#                 NotificationService._create(
+#                     user=_user,
+#                     notification_type="join_approved",
+#                     title="You joined via invite! 🎉",
+#                     message=(
+#                         f'You\'ve been added to "{_group.group_name}" '
+#                         "via an invite link. Welcome aboard!"
+#                     ),
+#                     related_group=_group,
+#                     action_url="Groups",
+#                     metadata={
+#                         "group_id": _group.id,
+#                         "group_name": _group.group_name,
+#                         "via_invite_link": True,
+#                     },
+#                 )
+#                 NotificationService.notify_new_member(_group.admin, _user, _group)
+#             except Exception as exc:
+#                 finance_logger.error(f"[InviteAcceptView] Notification error: {exc}")
+
+#         transaction.on_commit(_notify)
+#         from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
+#         _inv_user_name = user.profile.full_name
+#         _inv_gid = group.id
+#         transaction.on_commit(
+#             lambda: send_telegram_new_member.delay(_inv_gid, _inv_user_name)
+#         )
+#         if is_activating:
+#             transaction.on_commit(
+#                 lambda: send_telegram_group_activated.delay(_inv_gid)
+#             )
+
+#         is_activating = (
+#             group.current_members >= group.expected_members and not group.start_date
+#         )
+
+#         if is_activating:
+#             group.start_date = timezone.now().date()
+#             group.save(update_fields=["start_date"])
+#             PayoutOrder.objects.filter(group=group).delete()
+#             memberships = GroupMembership.objects.filter(group=group).order_by("joined_at")
+#             PayoutOrder.objects.bulk_create([
+#                 PayoutOrder(group=group, membership=m, position=idx)
+#                 for idx, m in enumerate(memberships, start=1)
+#             ])
+#             transaction.on_commit(
+#                 lambda: NotificationService.notify_group_activated(_group)
+#             )
+
+#         finance_logger.info({
+#             "event": "invite_link_auto_join",
+#             "user_id": user.id,
+#             "group_id": group.id,
+#             "group_activated": is_activating,
+#             "request_id": getattr(request, "request_id", None),
+#         })
+
+#         return Response({
+#             "message": f"Welcome to {group.group_name}! You have been added as a member.",
+#             "already_member": False,
+#             "group_public_id": group.public_id,
+#             "group_id": group.id,
+#             "group_name": group.group_name,
+#         }, status=status.HTTP_201_CREATED)
+
+
 class InviteAcceptView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -2886,6 +3176,25 @@ class InviteAcceptView(APIView):
             handled_by=group.admin,
         )
 
+        # ── Determine activation BEFORE any lambdas that read it ──────────────
+        is_activating = (
+            group.current_members >= group.expected_members and not group.start_date
+        )
+
+        if is_activating:
+            group.start_date = timezone.now().date()
+            group.save(update_fields=["start_date"])
+            PayoutOrder.objects.filter(group=group).delete()
+            memberships = GroupMembership.objects.filter(group=group).order_by("joined_at")
+            PayoutOrder.objects.bulk_create([
+                PayoutOrder(group=group, membership=m, position=idx)
+                for idx, m in enumerate(memberships, start=1)
+            ])
+            transaction.on_commit(
+                lambda: NotificationService.notify_group_activated(group)
+            )
+
+        # ── In-app join notification ──────────────────────────────────────────
         _group = group
         _user = user
 
@@ -2912,32 +3221,19 @@ class InviteAcceptView(APIView):
                 finance_logger.error(f"[InviteAcceptView] Notification error: {exc}")
 
         transaction.on_commit(_notify)
+
+        # ── Bot notifications (after is_activating is set) ────────────────────
         from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
         _inv_user_name = user.profile.full_name
         _inv_gid = group.id
+        _is_activating = is_activating  # capture for lambda closure
+
         transaction.on_commit(
             lambda: send_telegram_new_member.delay(_inv_gid, _inv_user_name)
         )
-        if is_activating:
+        if _is_activating:
             transaction.on_commit(
                 lambda: send_telegram_group_activated.delay(_inv_gid)
-            )
-
-        is_activating = (
-            group.current_members >= group.expected_members and not group.start_date
-        )
-
-        if is_activating:
-            group.start_date = timezone.now().date()
-            group.save(update_fields=["start_date"])
-            PayoutOrder.objects.filter(group=group).delete()
-            memberships = GroupMembership.objects.filter(group=group).order_by("joined_at")
-            PayoutOrder.objects.bulk_create([
-                PayoutOrder(group=group, membership=m, position=idx)
-                for idx, m in enumerate(memberships, start=1)
-            ])
-            transaction.on_commit(
-                lambda: NotificationService.notify_group_activated(_group)
             )
 
         finance_logger.info({
@@ -2955,7 +3251,6 @@ class InviteAcceptView(APIView):
             "group_id": group.id,
             "group_name": group.group_name,
         }, status=status.HTTP_201_CREATED)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AI CHAT
