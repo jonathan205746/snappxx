@@ -617,9 +617,28 @@ class TelegramWebhookView(APIView):
             "chat_id": chat_id,
         })
 
-        # Fire welcome message as a background task
-        from .bot_tasks import send_bot_welcome_message
-        send_bot_welcome_message.delay(link.group_id, "telegram")
+        # Send welcome message directly in the webhook handler
+        from .telegram import TelegramError, fmt_welcome, send_message
+        try:
+            frontend_url = getattr(settings, "FRONTEND_URL", "https://www.snappx.app")
+            dashboard_url = f"{frontend_url}/groups/{link.group.public_id or str(link.group_id)}"
+            text = fmt_welcome(
+                group_name=link.group.group_name,
+                platform="telegram",
+                dashboard_url=dashboard_url,
+            )
+            send_message(chat_id, text)
+            logger.info({
+                "event": "telegram_welcome_sent",
+                "group_id": link.group_id,
+                "chat_id": chat_id,
+            })
+        except TelegramError as exc:
+            logger.error({
+                "event": "telegram_welcome_failed",
+                "group_id": link.group_id,
+                "error": str(exc),
+            })
 
     def _handle_bot_removed(self, my_chat_member: dict):
         """Bot was kicked or left a group — mark the link as inactive."""
