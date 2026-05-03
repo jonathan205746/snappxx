@@ -1,5 +1,3 @@
-# core/middleware.py
-
 import uuid
 from threading import local
 from django.http import JsonResponse
@@ -35,7 +33,6 @@ class IdempotencyMiddleware:
             # Extract the key from headers
             idempotency_key = request.headers.get('X-Idempotency-Key')
 
-            # Attach it to the request object so views/decorators can find it
             request.idempotency_key = idempotency_key
 
             _thread_locals.idempotency_key = idempotency_key

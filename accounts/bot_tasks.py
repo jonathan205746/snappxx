@@ -1,17 +1,3 @@
-# accounts/bot_tasks.py
-"""
-QStash tasks for the Telegram bot service.
-
-Each task reads BotGroupLink to find which groups have a Telegram chat
-connected, then calls accounts/telegram.py to send the appropriate message.
-
-Design rules (same as accounts/tasks.py):
-  - Tasks are fire-and-forget. A notification failure must NEVER break
-    the calling transaction. All tasks catch exceptions and log them.
-  - Tasks are idempotent where possible (safe to retry).
-  - Heavy DB work uses select_related to avoid N+1 queries.
-"""
-
 import logging
 from decimal import Decimal
 
@@ -52,9 +38,7 @@ def _get_telegram_chat_id(group_id: int) -> str | None:
     return link.telegram_chat_id if link else None
 
 
-# ---------------------------------------------------------------------------
 # Welcome message — fires when a group is first linked
-# ---------------------------------------------------------------------------
 
 @shared_task
 def send_bot_welcome_message(group_id: int, platform: str) -> bool:
@@ -63,7 +47,6 @@ def send_bot_welcome_message(group_id: int, platform: str) -> bool:
     Called from bot_views.LinkBotGroupView on successful link.
     """
     if platform != "telegram":
-        # WhatsApp will be handled separately when implemented
         return False
 
     chat_id = _get_telegram_chat_id(group_id)
@@ -106,18 +89,13 @@ def send_bot_welcome_message(group_id: int, platform: str) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Contribution reminder — called by process_daily_payouts orchestrator
+# Contribution reminder. called by process_daily_payouts orchestrator
 # or a dedicated cron that checks upcoming due dates
-# ---------------------------------------------------------------------------
 
 @shared_task
 def send_telegram_contribution_reminder(group_id: int) -> bool:
     """
     Send a contribution reminder to the group's connected Telegram chat.
-
-    Reads live group data so the message is always accurate.
-    Called by: the daily reminder cron (run_contribution_reminders view).
     """
     chat_id = _get_telegram_chat_id(group_id)
     if not chat_id:
@@ -166,9 +144,7 @@ def send_telegram_contribution_reminder(group_id: int) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Payout announcement — fires after a successful payout
-# ---------------------------------------------------------------------------
+# Payout announcement. fires after a successful payout
 
 @shared_task
 def send_telegram_payout_announcement(
@@ -179,7 +155,6 @@ def send_telegram_payout_announcement(
 ) -> bool:
     """
     Announce a payout in the group's connected Telegram chat.
-    Called from: execute_group_payout task after a successful transfer.
     """
     chat_id = _get_telegram_chat_id(group_id)
     if not chat_id:
@@ -218,15 +193,12 @@ def send_telegram_payout_announcement(
         return False
 
 
-# ---------------------------------------------------------------------------
-# Group activated — fires when group reaches full capacity
-# ---------------------------------------------------------------------------
+# Group activated. fires when group reaches full capacity
 
 @shared_task
 def send_telegram_group_activated(group_id: int) -> bool:
     """
     Announce that the group is now live and payout cycles have started.
-    Called from: GroupRequestActionView and InviteAcceptView when group fills up.
     """
     chat_id = _get_telegram_chat_id(group_id)
     if not chat_id:
@@ -262,15 +234,12 @@ def send_telegram_group_activated(group_id: int) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
 # New member joined
-# ---------------------------------------------------------------------------
 
 @shared_task
 def send_telegram_new_member(group_id: int, member_name: str) -> bool:
     """
     Announce a new member joining the group's connected Telegram chat.
-    Called from: GroupRequestActionView (approve) and InviteAcceptView.
     """
     chat_id = _get_telegram_chat_id(group_id)
     if not chat_id:
@@ -308,15 +277,12 @@ def send_telegram_new_member(group_id: int, member_name: str) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Contribution progress update — fires after each individual contribution
-# ---------------------------------------------------------------------------
+# Contribution progress update. fires after each individual contribution
 
 @shared_task
 def send_telegram_contribution_update(group_id: int) -> bool:
     """
     Send a live contribution progress update to the group's Telegram chat.
-    Called from: ContributeView after a successful contribution is recorded.
 
     Shows a visual progress bar of how many members have contributed this cycle.
     """
@@ -383,10 +349,8 @@ def send_telegram_contribution_update(group_id: int) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
 # Broadcast contribution reminders to ALL linked groups
 # Called by the daily cron task
-# ---------------------------------------------------------------------------
 
 @shared_task
 def broadcast_contribution_reminders() -> str:
@@ -394,7 +358,6 @@ def broadcast_contribution_reminders() -> str:
     Fan-out task: find all active groups with Telegram links and
     dispatch a send_telegram_contribution_reminder task for each.
 
-    Called by: run_contribution_reminders cron endpoint.
     """
     from .models import BotGroupLink
 

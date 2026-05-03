@@ -1,35 +1,3 @@
-# accounts/bot_views.py
-"""
-Bot integration API endpoints.
-
-Endpoints:
-  POST   /accounts/groups/{group_id}/bot/generate-code/
-         Admin generates a short-lived link code for their group.
-
-  POST   /accounts/groups/bot/link/
-         Verify a link code and create a BotGroupLink record.
-
-  DELETE /accounts/groups/{group_id}/bot/unlink/
-         Admin removes a bot link for their group.
-
-  GET    /accounts/groups/bot/linked/
-         Return all groups the current user has bot links for.
-
-  GET    /accounts/groups/bot/my-groups/
-         Return groups administered by the current user + their link status.
-
-  POST   /accounts/bot/telegram/webhook/
-         Receives all updates from Telegram (messages, new chat members, etc.).
-         MUST be publicly accessible — verified via secret token header.
-
-  POST   /accounts/bot/telegram/set-webhook/
-         One-time setup: register our webhook URL with Telegram.
-         Staff-only endpoint.
-
-  GET    /accounts/bot/telegram/health/
-         Returns bot info + webhook status. Staff-only health check.
-"""
-
 import hashlib
 import json
 import logging
@@ -52,22 +20,18 @@ from .models import BotGroupLink, GroupMembership, SavingsGroup
 
 logger = logging.getLogger("accounts.security")
 
-# ── Constants ──────────────────────────────────────────────────────────────────
+# Constants
 
 _CODE_ALPHABET = string.ascii_uppercase + string.digits
-_CODE_TTL_SECONDS = 10 * 60  # 10 minutes
+_CODE_TTL_SECONDS = 10 * 60
 _CODE_CACHE_PREFIX = "bot_link_code:"
 
-# Cache key prefix for pending link codes awaiting chat_id assignment.
-# When an admin generates a code and hasn't linked it yet, we store the
-# code -> group_id mapping here. When Telegram sends us a /start command
-# with the code as the payload, we finalise the link.
 _PENDING_LINK_PREFIX = "bot_pending_link:"
 
 PLATFORM_CHOICES = ("whatsapp", "telegram")
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+#  Helpers
 
 def _generate_raw_code() -> str:
     return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
@@ -113,9 +77,7 @@ def _verify_telegram_secret(request) -> bool:
     return secrets.compare_digest(received, expected)
 
 
-# ── View: Generate Link Code ───────────────────────────────────────────────────
-
-
+# View: Generate Link Code
 @extend_schema(
     request=inline_serializer(
         name="GenerateBotCodeRequest",
@@ -189,7 +151,7 @@ class GenerateBotLinkCodeView(APIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
-# ── View: Link Group ───────────────────────────────────────────────────────────
+# View: Link Group
 
 
 @extend_schema(
@@ -291,8 +253,6 @@ class LinkBotGroupView(APIView):
         # Consume the code (one-time use)
         cache.delete(_cache_key(normalised))
 
-        # For Telegram: create the link record now (chat_id arrives later via webhook)
-        # For WhatsApp: same pattern
         link, created = BotGroupLink.objects.update_or_create(
             group=group,
             platform=platform,
@@ -306,9 +266,6 @@ class LinkBotGroupView(APIView):
         )
 
         # Store a pending entry in cache so the Telegram webhook can find
-        # which group to attach the chat_id to when /start arrives.
-        # Key: "bot_pending_link:{group_id}:telegram"
-        # This lets the webhook complete the final step automatically.
         if platform == "telegram":
             pending_key = f"{_PENDING_LINK_PREFIX}{group.id}:telegram"
             cache.set(pending_key, {"group_id": group.id}, timeout=60 * 60 * 24)  # 24h
@@ -340,9 +297,7 @@ class LinkBotGroupView(APIView):
         )
 
 
-# ── View: Unlink ───────────────────────────────────────────────────────────────
-
-
+# View: Unlink
 @extend_schema(
     request=inline_serializer(
         name="UnlinkBotGroupRequest",
@@ -403,7 +358,7 @@ class UnlinkBotGroupView(APIView):
         )
 
 
-# ── View: List Linked Groups ───────────────────────────────────────────────────
+# ── View: List Linked Groups
 
 
 @extend_schema(
@@ -457,7 +412,7 @@ class LinkedGroupsListView(APIView):
         return Response({"results": results, "count": len(results)})
 
 
-# ── View: Admin Groups for Bot ─────────────────────────────────────────────────
+# View: Admin Groups for Bot
 
 
 @extend_schema(
@@ -492,25 +447,13 @@ class AdminGroupsForBotView(APIView):
         return Response({"results": results})
 
 
-# ── View: Telegram Webhook ─────────────────────────────────────────────────────
+# View: Telegram Webhook
 
 
 @extend_schema(exclude=True)
 class TelegramWebhookView(APIView):
     """
     Receives all updates from Telegram.
-
-    Security: verified via X-Telegram-Bot-Api-Secret-Token header.
-    Always returns 200 so Telegram doesn't retry failed deliveries.
-
-    Handled update types:
-    - /start command with a group link code payload
-      → assigns the chat_id to the pending BotGroupLink record
-      → sends a welcome message
-    - New chat members (bot was added to a group)
-      → logs the event (chat_id assignment still needs /start)
-    - Left chat member (bot was removed)
-      → marks the BotGroupLink as inactive
     """
     permission_classes = []
     authentication_classes = []
@@ -526,7 +469,7 @@ class TelegramWebhookView(APIView):
                 "event": "telegram_webhook_invalid_secret",
                 "ip": request.META.get("REMOTE_ADDR"),
             })
-            # Still return 200 — returning 4xx causes Telegram to retry
+            # Return 200
             return Response({"status": "ignored"}, status=200)
 
         try:
@@ -551,13 +494,13 @@ class TelegramWebhookView(APIView):
         if not message:
             return
 
-        # ── /start command (possibly with link payload) ────────────────────
+        # /start command
         text = message.get("text", "")
         if text.startswith("/start"):
             self._handle_start(message)
             return
 
-        # ── Bot was removed from a group ───────────────────────────────────
+        # Bot was removed from a group
         new_chat_member = update.get("my_chat_member", {}).get("new_chat_member", {})
         if new_chat_member.get("status") in ("kicked", "left"):
             self._handle_bot_removed(update["my_chat_member"])
@@ -644,15 +587,13 @@ class TelegramWebhookView(APIView):
             })
 
 
-# ── View: Set Webhook (one-time setup) ────────────────────────────────────────
-
-
+# View: Set Webhook
 @extend_schema(
     request=inline_serializer(
         name="SetWebhookRequest",
         fields={
             "webhook_url": serializers.URLField(
-                help_text="Full public URL, e.g. https://your-domain.com/api/accounts/bot/telegram/webhook/"
+                help_text="Full public URL"
             )
         },
     ),
@@ -700,7 +641,7 @@ class SetTelegramWebhookView(APIView):
             )
 
 
-# ── View: Health check ─────────────────────────────────────────────────────────
+#  View: Health check
 
 
 @extend_schema(

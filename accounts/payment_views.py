@@ -1,21 +1,3 @@
-# accounts/payment_views.py
-
-"""
-accounts/payment_views.py
-
-All payment-related API views:
-
-  POST /payments/topup/initialize/     → User requests a wallet top-up
-  POST /payments/webhook/              → Paystack webhook receiver (charge + transfer events)
-  POST /payments/cashout/              → User requests a cash-out to their MoMo
-
-Design:
-- Webhook is the single source of truth for all payment state changes.
-- We NEVER credit a wallet based on a frontend callback alone.
-- Every financial mutation goes through LedgerService so the ledger
-  stays the single source of truth.
-"""
-
 import hashlib
 import json
 import logging
@@ -51,22 +33,18 @@ from .utils import idempotent_request
 
 logger = logging.getLogger("accounts.finance")
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
-MIN_TOPUP_GHS = Decimal("1.00")   # Paystack GHS minimum is ₵0.10 — we set a higher floor
+MIN_TOPUP_GHS = Decimal("1.00")
 MAX_TOPUP_GHS = Decimal("50000.00")
 MIN_CASHOUT_GHS = Decimal("5.00")
-CASHOUT_FEE_PERCENT = Decimal("8.00")  # 8% service fee shown in the frontend modal
+CASHOUT_FEE_PERCENT = Decimal("8.00")
 
 
 def _get_or_create_paystack_recipient(profile: Profile) -> str:
     """
     Return the cached Paystack recipient_code for a profile, creating it
     on Paystack if it doesn't exist yet.
-
-    Raises PaystackError if creation fails.
     """
     if profile.paystack_recipient_code:
         return profile.paystack_recipient_code
@@ -84,9 +62,7 @@ def _get_or_create_paystack_recipient(profile: Profile) -> str:
     return recipient_code
 
 
-# ---------------------------------------------------------------------------
 # View: Initialize Top-Up
-# ---------------------------------------------------------------------------
 
 @extend_schema(
     request=inline_serializer(
@@ -217,9 +193,8 @@ class TopUpInitializeView(APIView):
         )
 
 
-# ---------------------------------------------------------------------------
 # View: Paystack Webhook
-# ---------------------------------------------------------------------------
+
 PAYSTACK_IPS = frozenset({"52.31.139.75", "52.49.173.169", "52.214.14.220"})
 
 @extend_schema(exclude=True)
@@ -255,7 +230,7 @@ class PaystackWebhookView(APIView):
                 "ip": request.META.get("REMOTE_ADDR"),
                 "env": getattr(settings, "DJANGO_ENV", "unknown"),
             })
-            # Always return 200 — returning 4xx causes Paystack to retry
+            # Always return 200
             return Response({"status": "ignored"}, status=200)
 
         # Optional IP allowlist (production only, defence-in-depth) ─
@@ -272,7 +247,6 @@ class PaystackWebhookView(APIView):
                     "note": "HMAC was valid but IP not in allowlist",
                 })
 
-        # Parse and route
         try:
             payload = json.loads(request.body)
         except json.JSONDecodeError:
@@ -309,7 +283,7 @@ class PaystackWebhookView(APIView):
     def _handle_charge_success(self, data: dict):
         reference = data.get("reference", "")
 
-        # Find the PaystackTransaction we created at initialize time
+        # Find the PaystackTransaction created at initialize time
         try:
             ps_tx = PaystackTransaction.objects.select_for_update().get(
                 reference=reference,
@@ -324,7 +298,7 @@ class PaystackWebhookView(APIView):
             )
             return
 
-        # Idempotency guard — don't double-credit
+        # Idempotency guard: don't double-credit
         if ps_tx.status == "success":
             logger.warning(
                 {
@@ -334,7 +308,7 @@ class PaystackWebhookView(APIView):
             )
             return
 
-        # Verify on Paystack's side (defence-in-depth)
+        # Verify on Paystack's side (defense-in-depth)
         try:
             verified = verify_transaction(reference)
         except PaystackError as exc:
@@ -347,7 +321,7 @@ class PaystackWebhookView(APIView):
             )
             return
 
-        # ── CRITICAL: Amount mismatch check ──────────────────────────────────
+        # Amount mismatch check
         verified_pesewas = int(verified.get("amount", 0))
         expected_pesewas = int(
             (ps_tx.amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
@@ -366,13 +340,13 @@ class PaystackWebhookView(APIView):
             ps_tx.status = "failed"
             ps_tx.save(update_fields=["status", "updated_at"])
 
-            # ← NEW: Alert admins immediately
+            # Alert admins immediately
             self._send_topup_amount_mismatch_alert(
                 ps_tx, verified_pesewas, expected_pesewas
             )
             return
 
-        # ── Credit the wallet (only if amounts match) ────────────────────────
+        # Credit the wallet (only if amounts match)
         LedgerService.create_entry(
             user=ps_tx.user,
             actor=ps_tx.user,
@@ -410,7 +384,7 @@ class PaystackWebhookView(APIView):
             }
         )
 
-    # ── transfer.success ─────────────────────────────────────────────────────
+    # transfer.success
 
     @transaction.atomic
     def _handle_transfer_success(self, data: dict):
@@ -467,7 +441,7 @@ class PaystackWebhookView(APIView):
             }
         )
 
-    # ── transfer.failed ──────────────────────────────────────────────────────
+    # transfer failed
 
     @transaction.atomic
     def _handle_transfer_failed(self, data: dict):
@@ -520,7 +494,7 @@ class PaystackWebhookView(APIView):
         except Exception as exc:
             logger.error(f"[Webhook] Notification error after transfer.failed: {exc}")
 
-    # ── transfer.reversed ────────────────────────────────────────────────────
+    # transfer reversed
 
     @transaction.atomic
     def _handle_transfer_reversed(self, data: dict):
@@ -542,14 +516,14 @@ class PaystackWebhookView(APIView):
             return
 
         if ps_tx.status == "reversed":
-            return  # already handled — idempotent
+            return
 
         ps_tx.status = "reversed"
         ps_tx.paystack_reference = transfer_code
         ps_tx.save(update_fields=["status", "paystack_reference", "updated_at"])
 
         if ps_tx.transaction_type == "cashout":
-            # Refund: money came back to our Paystack balance → credit user wallet
+            # Refund: money came back to the Paystack balance so credit user wallet
             LedgerService.create_entry(
                 user=ps_tx.user, actor=ps_tx.user, amount=ps_tx.amount,
                 direction="credit", transaction_type="refund",
@@ -561,7 +535,7 @@ class PaystackWebhookView(APIView):
         elif ps_tx.transaction_type == "payout":
             group = ps_tx.related_group
             if group:
-                # Reverse the ledger (existing code is correct)
+                # Reverse the ledger
                 reversal_ref = f"payout-reversal-{reference}-{uuid.uuid4().hex[:8]}"
                 LedgerService.create_entry(
                     user=ps_tx.user, actor=ps_tx.user, amount=ps_tx.amount,
@@ -654,10 +628,7 @@ class PaystackWebhookView(APIView):
             except Exception as email_exc:
                 logger.critical(f"Failed to send top-up mismatch alert email: {email_exc}")
 
-# ---------------------------------------------------------------------------
 # View: Cash Out (user-initiated withdrawal)
-# ---------------------------------------------------------------------------
-
 
 @extend_schema(
     request=inline_serializer(
@@ -697,30 +668,14 @@ class PaystackWebhookView(APIView):
 )
 class CashOutView(APIView):
     """
-    Cash-out flow (hardened):
-
-      Phase 1  — Input validation (no DB writes yet).
-      Phase 2  — Create a durable PaystackTransaction(status=pending) + debit wallet
-                 inside a single atomic block. Two separate references are maintained:
-                   - internal_key: used as PaystackTransaction.reference and the
-                     LedgerEntry reference. May be derived from request_id for
-                     idempotency. Not sent to Paystack.
-                   - paystack_reference: always generated via generate_cashout_reference,
-                     guaranteed lowercase + alphanumeric + hyphens only. Sent to Paystack.
-                 Previously the code used f"CASHOUT-{request_id}" as the Paystack
-                 reference, which violates Paystack's format requirement (uppercase
-                 letters are not permitted). This caused Paystack to reject the transfer.
-      Phase 3  — Call Paystack outside any atomic context with the clean reference.
-                 If Paystack rejects, reverse the wallet debit immediately and mark
-                 the PS record failed.
-      Phase 4  — Record the transfer_code and return the response.
+    Cash-out flow:
     """
 
     permission_classes = [IsAuthenticated]
 
     @idempotent_request
     def post(self, request):
-        # ── Phase 1: Input validation ──────────────────────────────────────────
+        # Input validation
         if not request.user.is_verified:
             return Response(
                 {"error": "You must be verified to cash out."},
@@ -758,8 +713,6 @@ class CashOutView(APIView):
         paystack_reference = generate_cashout_reference(user.id)
 
         if request_id:
-            # Lowercase the full key to keep it consistent; strip any chars that
-            # would be unsafe in a reference field.
             internal_key = f"cashout-{request_id.lower()}"
         else:
             internal_key = paystack_reference
@@ -768,7 +721,7 @@ class CashOutView(APIView):
         service_fee = (amount * CASHOUT_FEE_PERCENT / 100).quantize(Decimal("0.01"))
         amount_to_transfer = amount - service_fee
 
-        # ── Phase 2: Create PaystackTransaction + debit wallet (single atomic block) ──
+        #Create PaystackTransaction + debit wallet (single atomic block)
         try:
             with transaction.atomic():
                 # Pessimistic lock on wallet to prevent concurrent debits
@@ -783,9 +736,6 @@ class CashOutView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                # Create the tracking record using the internal key.
-                # IntegrityError here means the idempotency decorator missed a
-                # duplicate (shouldn't happen, but we handle it gracefully).
                 ps_tx = PaystackTransaction.objects.create(
                     user=user,
                     reference=internal_key,
@@ -794,9 +744,7 @@ class CashOutView(APIView):
                     status="pending",
                 )
 
-                # Debit the wallet. LedgerService.create_entry also does a balance
-                # check internally, but the select_for_update above is our primary
-                # concurrency guard.
+                # Debit the wallet.
                 LedgerService.create_entry(
                     user=user,
                     actor=user,
@@ -833,7 +781,7 @@ class CashOutView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # ── Phase 3: Call Paystack (OUTSIDE any transaction) ──────────────────
+        # Call Paystack
         profile = user.profile
 
         try:
@@ -857,7 +805,7 @@ class CashOutView(APIView):
             )
 
         try:
-            # Send paystack_reference to Paystack — guaranteed safe format.
+            # Send paystack_reference to Paystack
             transfer_data = _initiate_transfer_with_retry(
                 recipient_code=recipient_code,
                 amount_ghs=amount_to_transfer,
@@ -883,9 +831,7 @@ class CashOutView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        # ── Phase 4: Record Paystack's transfer_code on our record ────────────
-        # Store the clean paystack_reference so webhook handlers and
-        # sync_pending_transfers can look it up on Paystack's side.
+        # Record Paystack's transfer_code on our record
         PaystackTransaction.objects.filter(reference=internal_key).update(
             paystack_reference=transfer_data.get("transfer_code", "") or paystack_reference,
             updated_at=timezone.now(),
@@ -915,7 +861,7 @@ class CashOutView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-    # ── Private helper ─────────────────────────────────────────────────────────
+    # Private helper
 
     def _reverse_cashout_debit(
         self,
@@ -955,7 +901,7 @@ class CashOutView(APIView):
             return True
 
         except Exception as exc:
-            # CRITICAL: Money is stuck — alert humans immediately
+            # If Money is stuck, alert immediately
             logger.critical({
                 "event": "CASHOUT_REVERSAL_FAILED — MANUAL INTERVENTION REQUIRED",
                 "user_id": user.id,
@@ -1026,10 +972,7 @@ This is a high-priority issue. Please handle immediately.
         except Exception as email_exc:
             logger.critical(f"Failed to send reversal failure email: {email_exc}")
 
-# ---------------------------------------------------------------------------
-# View: Transaction Status (optional polling fallback)
-# ---------------------------------------------------------------------------
-
+# View: Transaction Status
 @extend_schema(
     responses={
         200: inline_serializer(
@@ -1080,9 +1023,7 @@ class PaymentStatusView(APIView):
         )
 
 
-# ---------------------------------------------------------------------------
 # Internal helper — transfer with retry on recipient refresh
-# ---------------------------------------------------------------------------
 
 def _initiate_transfer_with_retry(
     *,
@@ -1093,7 +1034,6 @@ def _initiate_transfer_with_retry(
 ) -> dict:
     """
     Thin wrapper around paystack.initiate_transfer.
-    Imported here to keep payment_views self-contained.
     """
     from .paystack import initiate_transfer
     return initiate_transfer(

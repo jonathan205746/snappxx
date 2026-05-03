@@ -1,5 +1,3 @@
-# accounts/models.py
-
 import os
 import uuid
 import secrets
@@ -658,13 +656,11 @@ class Wallet(models.Model):
 
     class Meta:
         constraints = [
-            # 1. The Balance Floor: Use 'condition' instead of 'check'
             CheckConstraint(
                 condition=Q(current_balance__gte=0),
                 name="wallet_balance_not_negative",
                 violation_error_message="Wallet balance cannot drop below zero."
             ),
-            # 2. The XOR Identity: Use 'condition' instead of 'check'
             CheckConstraint(
                 condition=(
                     Q(user__isnull=False, group__isnull=True) |
@@ -966,22 +962,10 @@ class PaystackTransaction(models.Model):
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # BOT INTEGRATION
-# ─────────────────────────────────────────────────────────────────────────────
-
 class BotGroupLink(models.Model):
     """
     Records that a SavingsGroup has been linked to an external messaging bot.
-
-    Two-step activation for Telegram:
-      Step 1 — Admin generates a link code on the Bot Integration page and
-               submits it → record is created with telegram_chat_id=None.
-      Step 2 — Admin adds the bot to their Telegram group and sends /start
-               → webhook fires, assigns telegram_chat_id, link becomes active.
-
-    is_active=True AND telegram_chat_id is not None = fully operational.
-    is_active=True AND telegram_chat_id is None     = pending activation.
     """
 
     PLATFORM_CHOICES = (
@@ -1005,9 +989,6 @@ class BotGroupLink(models.Model):
     )
     is_active = models.BooleanField(default=True, db_index=True)
 
-    # Telegram group chat ID — negative integer stored as string.
-    # Assigned by the webhook when the bot receives /start in the group.
-    # Null until that happens.
     telegram_chat_id = models.CharField(
         max_length=50,
         null=True,

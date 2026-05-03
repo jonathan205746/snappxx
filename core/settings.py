@@ -1,5 +1,3 @@
-# core/settings.py
-
 import sys
 import os
 from datetime import timedelta
@@ -13,17 +11,11 @@ from django.core.exceptions import ImproperlyConfigured
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CORE IDENTITY
-# ─────────────────────────────────────────────────────────────────────────────
-
 SECRET_KEY = config("SECRET_KEY")
 DEBUG = config("DEBUG", default=False, cast=bool)
 DJANGO_ENV = config("DJANGO_ENV", default="development")
 
-# ── SECURITY: Hard guard — refuse to start if DEBUG is on in production ──────
-# This prevents a misconfigured environment variable from exposing stack traces,
-# SQL queries, and environment variables to the public internet.
+
 if DJANGO_ENV == "production" and DEBUG:
     raise ImproperlyConfigured(
         "DEBUG=True is set but DJANGO_ENV=production. "
@@ -31,9 +23,6 @@ if DJANGO_ENV == "production" and DEBUG:
         "Set DEBUG=False in your production environment."
     )
 
-# ── SECURITY: Admin path — set ADMIN_PATH to a random string in production ───
-# e.g. ADMIN_PATH=xk92p-manage   (then /admin/ returns 404, scanners get nothing)
-# Default is 'admin' for local development convenience only.
 ADMIN_PATH = config("ADMIN_PATH", default="admin")
 
 ALLOWED_HOSTS = [
@@ -42,10 +31,6 @@ ALLOWED_HOSTS = [
     ".vercel.app",
     "snappx-backend-ochre.vercel.app",
 ]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# INSTALLED APPS
-# ─────────────────────────────────────────────────────────────────────────────
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -76,10 +61,6 @@ INSTALLED_APPS = [
 
 INSTALLED_APPS += ["django_qstash"]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# QSTASH
-# ─────────────────────────────────────────────────────────────────────────────
-
 QSTASH_TOKEN = config("QSTASH_TOKEN", default=None)
 QSTASH_URL = config("ACTUAL_QSTASH_URL", default=config("QSTASH_URL", default="https://qstash.upstash.io"))
 QSTASH_DOMAIN = config("QSTASH_DOMAIN", default=None)
@@ -103,10 +84,6 @@ if len(sys.argv) > 1 and sys.argv[1] in [
 
 DJANGO_QSTASH_DOMAIN = QSTASH_DOMAIN
 QSTASH_CURRENT_SIGNING_KEY = config("QSTASH_CURRENT_SIGNING_KEY", default=None)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MIDDLEWARE
-# ─────────────────────────────────────────────────────────────────────────────
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -149,10 +126,6 @@ WSGI_APPLICATION = "core.wsgi.application"
 
 print(f"--- DJANGO_ENV = {DJANGO_ENV} ---")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DATABASE
-# ─────────────────────────────────────────────────────────────────────────────
-
 if DJANGO_ENV == "production" or not DEBUG:
     print("--- Using Neon Database (Production / Preview) ---")
     DATABASES = {
@@ -175,10 +148,6 @@ else:
         }
     }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PASSWORD VALIDATION
-# ─────────────────────────────────────────────────────────────────────────────
-
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -186,24 +155,12 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# THIRD-PARTY API KEYS
-# ─────────────────────────────────────────────────────────────────────────────
-
 GROQ_API_KEY = config("GROQ_API_KEY", default=None)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# INTERNATIONALISATION
-# ─────────────────────────────────────────────────────────────────────────────
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Africa/Accra"
 USE_I18N = True
 USE_TZ = True
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STATIC & MEDIA FILES
-# ─────────────────────────────────────────────────────────────────────────────
 
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
@@ -220,10 +177,6 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CORS
-# ─────────────────────────────────────────────────────────────────────────────
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -257,10 +210,6 @@ CORS_ALLOW_HEADERS = [
 
 CORS_EXPOSE_HEADERS = ["x-request-id"]
 CORS_URLS_REGEX = r"^/api/.*$"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# REST FRAMEWORK + JWT
-# ─────────────────────────────────────────────────────────────────────────────
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -297,10 +246,6 @@ SIMPLE_JWT = {
     "ALGORITHM": "HS512",
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CLOUDINARY
-# ─────────────────────────────────────────────────────────────────────────────
-
 DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
 CLOUDINARY_STORAGE = {
     "CLOUD_NAME": config("CLOUDINARY_CLOUD_NAME"),
@@ -308,17 +253,9 @@ CLOUDINARY_STORAGE = {
     "API_SECRET": config("CLOUDINARY_API_SECRET"),
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DAWUROBO SMS OTP
-# ─────────────────────────────────────────────────────────────────────────────
-
 DAWUROBO_API_KEY = config("DAWUROBO_API_KEY")
 DAWUROBO_ACCESS_TOKEN = config("DAWUROBO_ACCESS_TOKEN")
 DAWUROBO_SENDER_ID = config("DAWUROBO_SENDER_ID", default="Dawurobo")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AUTHENTICATION BACKENDS
-# ─────────────────────────────────────────────────────────────────────────────
 
 AUTHENTICATION_BACKENDS = [
     'axes.backends.AxesStandaloneBackend',
@@ -332,10 +269,6 @@ AXES_LOCKOUT_PARAMETERS = ["username", "ip_address"]
 AXES_RESET_ON_SUCCESS = True
 AXES_ENABLE_ADMIN = True
 AXES_VERBOSE = False
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DRF SPECTACULAR (OpenAPI / Swagger)
-# ─────────────────────────────────────────────────────────────────────────────
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Snappx Backend API",
@@ -359,18 +292,14 @@ SPECTACULAR_SETTINGS = {
 TELEGRAM_BOT_TOKEN = config("TELEGRAM_BOT_TOKEN", default=None)
 TELEGRAM_WEBHOOK_SECRET = config("TELEGRAM_WEBHOOK_SECRET", default=None)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EMAIL
-# ─────────────────────────────────────────────────────────────────────────────
-
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = "smtp.sendgrid.net"
+EMAIL_HOST = "smtp.resend.com"
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = "apikey"
-EMAIL_HOST_PASSWORD = os.environ.get("SENDGRID_API_KEY")
+EMAIL_HOST_USER = "resend"
+EMAIL_HOST_PASSWORD = os.environ.get("RESEND_API_KEY")
 DEFAULT_FROM_EMAIL = f'no-reply@{os.environ.get("SNAAPX_DOMAIN", "snappx.app")}'
-SERVER_EMAIL = EMAIL_HOST_USER
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 SITE_ID = 1
 ENVIRONMENT = config("ENVIRONMENT", default="development")
@@ -383,10 +312,6 @@ else:
 ADMINS = [
     ("Pierre", "pierres717@gmail.com"),
 ]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ENCRYPTION & HASHING
-# ─────────────────────────────────────────────────────────────────────────────
 
 FIELD_ENCRYPTION_KEY = config("FIELD_ENCRYPTION_KEY")
 
@@ -406,10 +331,6 @@ if not HASH_SALT:
             stacklevel=2,
         )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PAYSTACK
-# ─────────────────────────────────────────────────────────────────────────────
-
 PAYSTACK_SECRET_KEY = config("PAYSTACK_SECRET_KEY", default=None)
 PAYSTACK_PUBLIC_KEY = config("PAYSTACK_PUBLIC_KEY", default=None)
 
@@ -420,55 +341,28 @@ if len(sys.argv) > 1 and sys.argv[1] in [
     PAYSTACK_SECRET_KEY = PAYSTACK_SECRET_KEY or "sk_test_dummy_for_local"
     PAYSTACK_PUBLIC_KEY = PAYSTACK_PUBLIC_KEY or "pk_test_dummy_for_local"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SECURITY HEADERS
-# These are read by Django's SecurityMiddleware (already in MIDDLEWARE above).
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Clickjacking protection ───────────────────────────────────────────────────
-# Tells browsers: this site must never be loaded in an iframe.
 X_FRAME_OPTIONS = "DENY"
 
-# ── MIME-type sniffing protection ─────────────────────────────────────────────
-# Tells browsers: don't guess the content type — trust the Content-Type header.
-# Prevents attacks where a .jpg containing JS gets executed as a script.
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
-# ── XSS filter (legacy browsers) ─────────────────────────────────────────────
 SECURE_BROWSER_XSS_FILTER = True
 
-# ── Referrer policy ──────────────────────────────────────────────────────────
-# Don't leak the full URL (which may contain tokens) to third-party sites.
+
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 
 if DJANGO_ENV == "production":
-    # ── SECURITY: Force HTTPS ─────────────────────────────────────────────────
-    # Redirects all HTTP requests to HTTPS.
-    # Only safe to enable once you have a real SSL certificate.
     SECURE_SSL_REDIRECT = True
 
-    # ── SECURITY: HSTS ───────────────────────────────────────────────────────
-    # Tells browsers: for the next 1 year, only connect to this domain over HTTPS.
-    # Once set, this cannot easily be undone — browsers cache it.
-    # Start with a short value (e.g. 3600) in staging, then increase to 31536000.
-    SECURE_HSTS_SECONDS = 31536000          # 1 year
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True   # applies to *.snappx.app too
-    SECURE_HSTS_PRELOAD = True              # submit to browser preload lists
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
 
-    # ── SECURITY: Secure cookies ─────────────────────────────────────────────
-    # Session and CSRF cookies are only sent over HTTPS.
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
-    # ── SECURITY: Cookie flags ────────────────────────────────────────────────
-    SESSION_COOKIE_HTTPONLY = True   # JS cannot read the session cookie
-    CSRF_COOKIE_HTTPONLY = False     # CSRF token must be readable by JS for AJAX
-    SESSION_COOKIE_SAMESITE = "Lax" # CSRF protection for cookie-based sessions
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CACHE
-# Used by: OTP lockout (accounts/otp_lockout.py)
-# ─────────────────────────────────────────────────────────────────────────────
+    SESSION_COOKIE_HTTPONLY = True
+    CSRF_COOKIE_HTTPONLY = False
+    SESSION_COOKIE_SAMESITE = "Lax"
 
 _UPSTASH_REDIS_URL = config("UPSTASH_REDIS_URL", default=None)
 
@@ -486,8 +380,6 @@ if _UPSTASH_REDIS_URL:
         }
     }
 else:
-    # Fallback for local development where Redis isn't running
-    # OTP lockout still works locally, just not across process restarts
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -495,18 +387,10 @@ else:
         }
     }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LOGGING
-# Scrubs PII (phone numbers, emails) before log records are emitted.
-# ─────────────────────────────────────────────────────────────────────────────
-
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "filters": {
-        # ── SECURITY: PII scrubber ────────────────────────────────────────────
-        # core/logging_filters.py — replaces phone numbers and emails with
-        # masked versions before they hit the log output.
         "pii_scrubber": {
             "()": "core.logging_filters.PIIScrubberFilter",
         },
@@ -533,26 +417,21 @@ LOGGING = {
         "level": "WARNING",
     },
     "loggers": {
-        # Financial events — INFO and above, PII-scrubbed
         "accounts.finance": {
             "handlers": ["console"],
             "level": "INFO",
             "propagate": False,
         },
-        # Security events — WARNING and above, PII-scrubbed
-        # Used by: VerifyOTPView, AIChatView, ProfileUpdateView
         "accounts.security": {
             "handlers": ["console"],
             "level": "WARNING",
             "propagate": False,
         },
-        # Django internals — only errors
         "django": {
             "handlers": ["console"],
             "level": "ERROR",
             "propagate": False,
         },
-        # Django security framework events
         "django.security": {
             "handlers": ["console"],
             "level": "WARNING",

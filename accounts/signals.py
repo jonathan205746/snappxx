@@ -1,5 +1,3 @@
-# accounts/signals.py
-
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.conf import settings
@@ -24,7 +22,6 @@ def create_group_wallet(sender, instance, created, **kwargs):
 def send_welcome_notification(sender, instance, created, **kwargs):
     """
     Fires a one-time welcome notification when a new user is created.
-    Runs inside on_commit to avoid firing before the transaction commits.
     """
     if not created:
         return

@@ -1,5 +1,3 @@
-# accounts/services.py
-
 import logging
 import uuid
 from decimal import Decimal

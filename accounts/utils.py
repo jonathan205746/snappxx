@@ -1,5 +1,3 @@
-# accounts/utils.py
-
 import json
 from functools import wraps
 from hashlib import sha256

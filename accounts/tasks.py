@@ -1,5 +1,3 @@
-# accounts/tasks.py
-
 import requests
 from decimal import Decimal
 from django.conf import settings
@@ -79,7 +77,7 @@ def verify_and_invalidate_otp_sync(phone_number: str, code: str) -> bool:
                 headers=HEADERS,
                 timeout=3,
             )
-            # Mask phone in log — PIIScrubberFilter also handles this
+            # Mask phone in log
             logger.info({
                 "event": "otp_verified_and_invalidated",
                 "phone_suffix": f"***{phone_number[-4:]}",

@@ -1,5 +1,3 @@
-# accounts/auth_urls.py
-
 from .views import (
     ChangePasswordView, FullSignupView, SendOTPView, VerifyOTPView, CustomLoginView, ForgotPasswordView, ResetPasswordView, MeView
 )

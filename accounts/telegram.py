@@ -1,16 +1,3 @@
-# accounts/telegram.py
-"""
-Thin, typed wrapper around the Telegram Bot HTTP API.
-
-Design mirrors accounts/paystack.py:
-  - Every method either returns parsed data on success
-    or raises TelegramError with a human-readable message.
-  - No business logic here — just HTTP + error handling.
-  - All callers (views / tasks) own the Django DB work.
-
-Telegram Bot API docs: https://core.telegram.org/bots/api
-"""
-
 import logging
 from typing import Optional
 
@@ -78,27 +65,12 @@ def _get(method: str, params: dict = None) -> dict:
     return body.get("result", {})
 
 
-# ---------------------------------------------------------------------------
-# Core messaging
-# ---------------------------------------------------------------------------
-
 def send_message(
     chat_id: str | int,
     text: str,
     parse_mode: str = "HTML",
     disable_web_page_preview: bool = True,
 ) -> dict:
-    """
-    Send a text message to a chat (group or private).
-
-    Args:
-        chat_id:    Telegram chat ID (negative for groups, positive for users).
-        text:       Message body. Supports HTML tags when parse_mode="HTML".
-        parse_mode: "HTML" or "Markdown". HTML is safer (fewer escape issues).
-
-    Returns:
-        The sent Message object from Telegram.
-    """
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -134,15 +106,9 @@ def get_chat(chat_id: str | int) -> dict:
 def set_webhook(webhook_url: str, secret_token: str = None) -> dict:
     """
     Register a webhook URL with Telegram.
-    Telegram will POST all updates (messages, new members, etc.) to this URL.
-
-    Call this once after deployment:
-        from accounts.telegram import set_webhook
-        set_webhook("https://your-domain.com/api/accounts/bot/telegram/webhook/")
     """
     payload: dict = {"url": webhook_url}
     if secret_token:
-        # Telegram sends this in X-Telegram-Bot-Api-Secret-Token header
         payload["secret_token"] = secret_token
     return _post("setWebhook", payload)
 
@@ -161,12 +127,6 @@ def get_me() -> dict:
     """Return basic info about the bot itself. Good for health checks."""
     return _get("getMe")
 
-
-# ---------------------------------------------------------------------------
-# Message templates
-# Centralised here so changing copy doesn't require touching tasks.
-# All templates use HTML parse_mode.
-# ---------------------------------------------------------------------------
 
 def fmt_contribution_reminder(
     group_name: str,

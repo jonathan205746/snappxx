@@ -1,13 +1,9 @@
-# accounts/permissions.py
-
-
 from rest_framework import permissions
 from .models import SavingsGoal, SavingsGroup, GroupJoinRequest
 
 class IsGroupAdmin(permissions.BasePermission):
     """
     Custom permission to only allow the admin of a group to perform certain actions.
-    This works for views where the group_id is in the URL ( /groups/{id}/requests/).
     """
     message = 'You must be the administrator of this group to perform this action.'
 

@@ -1,5 +1,3 @@
-# accounts/management/commands/rehash_momo_numbers.py
-
 import hashlib
 from django.core.management.base import BaseCommand
 from django.conf import settings

@@ -1,18 +1,3 @@
-# accounts/paystack.py
-
-"""
-accounts/paystack.py
-
-A clean, typed wrapper around the Paystack REST API.
-Every method either returns the parsed `data` object on success
-or raises PaystackError with a human-readable message.
-
-Design principles:
-- No business logic here — just HTTP + error handling.
-- All amounts are expected in PESEWAS (GHS subunit × 100).
-- Callers (views / tasks) own the Django DB work.
-"""
-
 import hashlib
 import hmac
 import logging
@@ -27,7 +12,7 @@ logger = logging.getLogger("accounts.finance")
 
 PAYSTACK_BASE = "https://api.paystack.co"
 
-# Map our internal momo_provider slugs → Paystack bank_code strings
+# Map internal momo_provider slugs → Paystack bank_code strings
 PROVIDER_TO_PAYSTACK: dict[str, str] = {
     "mtn": "MTN",
     "telecel": "VOD",
@@ -90,10 +75,7 @@ def _get(endpoint: str) -> dict:
     return body.get("data", {})
 
 
-# ---------------------------------------------------------------------------
 # Transactions (Money In)
-# ---------------------------------------------------------------------------
-
 def initialize_transaction(
     *,
     email: str,
@@ -124,7 +106,7 @@ def initialize_transaction(
         "amount": amount_pesewas,
         "reference": reference,
         "currency": "GHS",
-        # Default to mobile_money + card; caller can override
+        # Default to mobile_money + card
         "channels": channels or ["mobile_money", "card"],
     }
     if callback_url:
@@ -146,9 +128,6 @@ def initialize_transaction(
 def verify_transaction(reference: str) -> dict:
     """
     Verify a transaction by reference.
-
-    Returns the full Paystack transaction object.
-    Raises PaystackError if the transaction is not found or not successful.
     """
     data = _get(f"/transaction/verify/{reference}")
 
@@ -162,9 +141,7 @@ def verify_transaction(reference: str) -> dict:
     return data
 
 
-# ---------------------------------------------------------------------------
-# Transfer Recipients (Money Out — prerequisite)
-# ---------------------------------------------------------------------------
+# Transfer Recipients (Money Out)
 
 def create_transfer_recipient(
     *,
@@ -173,15 +150,7 @@ def create_transfer_recipient(
     momo_provider: str,
 ) -> str:
     """
-    Create a Paystack Transfer Recipient for a Ghanaian MoMo account.
-
-    Args:
-        name:           Full name on the MoMo account.
-        account_number: Phone number (E.164 or local format).
-        momo_provider:  One of 'mtn', 'telecel', 'airteltigo'.
-
-    Returns:
-        recipient_code  e.g. "RCP_xxxxxxxxxxxx"
+    Create a Paystack Transfer Recipient for a MoMo account.
     """
     bank_code = PROVIDER_TO_PAYSTACK.get(momo_provider.lower())
     if not bank_code:
@@ -190,7 +159,6 @@ def create_transfer_recipient(
             f"Must be one of: {list(PROVIDER_TO_PAYSTACK.keys())}"
         )
 
-    # Strip + prefix — Paystack expects local format for GHS mobile_money
     clean_number = account_number.lstrip("+")
 
     payload = {
@@ -216,9 +184,7 @@ def create_transfer_recipient(
     return recipient_code
 
 
-# ---------------------------------------------------------------------------
 # Transfers (Money Out)
-# ---------------------------------------------------------------------------
 
 def initiate_transfer(
     *,
@@ -229,16 +195,6 @@ def initiate_transfer(
 ) -> dict:
     """
     Initiate a transfer to a previously created recipient.
-
-    Args:
-        recipient_code: Paystack RCP_xxx code.
-        amount_ghs:     Amount in GHS (will be converted to pesewas).
-        reference:      Your unique transfer reference (16-50 chars,
-                        lowercase alphanumeric + dash/underscore).
-        reason:         Narration shown on recipient's statement.
-
-    Returns:
-        Paystack transfer data dict (includes transfer_code, status).
     """
     from decimal import ROUND_HALF_UP
     amount_pesewas = int(
@@ -275,23 +231,11 @@ def verify_transfer(reference: str) -> dict:
     return _get(f"/transfer/verify/{reference}")
 
 
-# ---------------------------------------------------------------------------
 # Webhook signature verification
-# ---------------------------------------------------------------------------
 
 def verify_webhook_signature(payload_bytes: bytes, signature_header: str) -> bool:
     """
     Verify that a webhook request originated from Paystack.
-
-    Paystack signs the raw request body with your secret key using
-    HMAC-SHA512 and sends the hex digest in the x-paystack-signature header.
-
-    Args:
-        payload_bytes:      Raw request body bytes (before any JSON parsing).
-        signature_header:   Value of the 'x-paystack-signature' header.
-
-    Returns:
-        True if the signature matches, False otherwise.
     """
     secret = getattr(settings, "PAYSTACK_SECRET_KEY", "")
     if not secret:
@@ -308,18 +252,10 @@ def verify_webhook_signature(payload_bytes: bytes, signature_header: str) -> boo
         hashlib.sha512,
     ).hexdigest()
 
-    # expected = hmac.new(
-    #     secret.encode("utf-8"),
-    #     payload_bytes,
-    #     hashlib.sha512,
-    # ).hexdigest()
-
     return hmac.compare_digest(expected, signature_header)
 
 
-# ---------------------------------------------------------------------------
 # Reference generation helpers
-# ---------------------------------------------------------------------------
 
 def generate_topup_reference(user_id: int) -> str:
     """Generate a unique reference for a wallet top-up."""
@@ -347,10 +283,6 @@ def generate_payout_reference(group_id: int, cycle: int, attempt: int = 1) -> st
       "-" = 1
       uuid hex (12 chars) = 12
       Total = 42 chars — safely under the 50-char limit.
-
-    Previously used 16 hex chars which, combined with the "-retry" suffix appended
-    in retry_failed_payouts, could produce strings of 51+ characters, violating
-    the Paystack maximum length requirement.
     """
     short_uuid = uuid.uuid4().hex[:12]
     return f"snx-payout-{group_id}-c{cycle}-a{attempt}-{short_uuid}"

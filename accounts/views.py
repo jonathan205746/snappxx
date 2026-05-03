@@ -1,5 +1,3 @@
-# accounts/views.py
-
 import uuid
 import os as _os
 import hashlib
@@ -67,7 +65,7 @@ from django.db.models.functions import TruncMonth
 from django.views.decorators.csrf import csrf_exempt
 from .otp_lockout import check_lockout, clear_failures, record_failure
 
-# ── Loggers
+#  Loggers
 security_logger = logging.getLogger("accounts.security")
 finance_logger = logging.getLogger("accounts.finance")
 
@@ -97,9 +95,6 @@ def _validate_profile_picture(file) -> "str | None":
     if ext not in PROFILE_PIC_ALLOWED_EXTENSIONS:
         return "Profile picture must be a JPG or PNG file."
 
-    # content_type is set by Django's MultiPartParser from the browser's
-    # Content-Disposition header — not cryptographically trustworthy but
-    # sufficient for defence-in-depth alongside the extension check.
     content_type = getattr(file, "content_type", "") or ""
     if content_type not in PROFILE_PIC_ALLOWED_CONTENT_TYPES:
         return "Profile picture must be a JPG or PNG file."
@@ -110,9 +105,7 @@ def _validate_profile_picture(file) -> "str | None":
 
     return None
 
-# ─────────────────────────────────────────────────────────────────────────────
 # AUTH VIEWS
-# ─────────────────────────────────────────────────────────────────────────────
 
 class CustomLoginView(TokenObtainPairView):
     permission_classes = [AllowAny]
@@ -121,13 +114,7 @@ class CustomLoginView(TokenObtainPairView):
 
 class ForgotPasswordView(APIView):
     """
-    POST /api/auth/forgot-password/
-
     Sends an OTP to the user's registered MoMo number for password reset.
-
-    Security: rate-limited per IP. Does NOT use otp_lockout because we are
-    SENDING the OTP here, not verifying it — the lockout applies at verification
-    (ResetPasswordView below).
     """
     permission_classes = [AllowAny]
     serializer_class = ForgotPasswordSerializer
@@ -183,17 +170,12 @@ class ForgotPasswordView(APIView):
 )
 class ResetPasswordView(APIView):
     """
-    POST /api/auth/reset-password/
-
     Verifies OTP and resets password.
 
     Security layers:
       1. Rate limit per IP (3 per 10 minutes)
       2. OTP lockout per phone (3 failures → 1 hour lockout, via otp_lockout.py)
       3. OTP verification via Dawurobo (invalidated immediately on success)
-
-    Without the lockout, an attacker knowing a target phone number could brute-force
-    the 6-digit numeric OTP (1,000,000 combinations) given enough requests.
     """
     permission_classes = [AllowAny]
     serializer_class = ResetPasswordSerializer
@@ -207,7 +189,7 @@ class ResetPasswordView(APIView):
         code = serializer.validated_data["code"]
         new_password = serializer.validated_data["password"]
 
-        # ── Layer 2: OTP lockout check ────────────────────────────────────────
+        # OTP lockout check
         if check_lockout(phone):
             security_logger.warning({
                 "event": "password_reset_otp_locked_out",
@@ -219,7 +201,7 @@ class ResetPasswordView(APIView):
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        # ── Layer 3: OTP verification ─────────────────────────────────────────
+        # OTP verification
         if not verify_and_invalidate_otp_sync(phone, code):
             failure_count = record_failure(phone)
             remaining = max(0, 3 - failure_count)
@@ -241,10 +223,9 @@ class ResetPasswordView(APIView):
 
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ── OTP valid: clear lockout counter ─────────────────────────────────
         clear_failures(phone)
 
-        # ── Update password ───────────────────────────────────────────────────
+        # Update password
         normalized_phone = Profile.normalize_momo_number(phone)
         try:
             phone_hash = Profile.compute_momo_hash(normalized_phone)
@@ -324,8 +305,6 @@ class ChangePasswordView(APIView):
 
 class SendOTPView(APIView):
     """
-    POST /api/auth/otp/send/
-
     Rate limit: 5 requests per 10 minutes per IP.
     """
     permission_classes = [AllowAny]
@@ -380,7 +359,7 @@ class VerifyOTPView(APIView):
         phone = serializer.validated_data["phone_number"]
         code = serializer.validated_data["code"]
 
-        # ── Layer 3: Hard lockout check ───────────────────────────────────────
+        # Hard lockout check
         if check_lockout(phone):
             security_logger.warning({
                 "event": "otp_verify_locked_out",
@@ -392,7 +371,7 @@ class VerifyOTPView(APIView):
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
-        # ── Layer 4: OTP verification ─────────────────────────────────────────
+        # OTP verification
         if verify_and_invalidate_otp_sync(phone, code):
             clear_failures(phone)
 
@@ -424,7 +403,7 @@ class VerifyOTPView(APIView):
                 )
 
         else:
-            # ── Layer 5: Record failure ───────────────────────────────────────
+            # Record failure
             failure_count = record_failure(phone)
 
             security_logger.warning({
@@ -446,9 +425,7 @@ class VerifyOTPView(APIView):
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # SIGNUP
-# ─────────────────────────────────────────────────────────────────────────────
 
 @method_decorator(
     [never_cache, ratelimit(key="ip", rate="5/h", method="POST", block=True)],
@@ -496,10 +473,7 @@ class FullSignupView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── Date of birth validation ──────────────────────────────────────────
-        # Must be in the past; user must be at least 13 years old.
-        # We parse explicitly here so the error message is user-friendly
-        # rather than a Django ValidationError stack trace.
+        # Validate DOB
         import datetime as _dt
         try:
             dob = _dt.date.fromisoformat(str(data["date_of_birth"]))
@@ -518,13 +492,9 @@ class FullSignupView(APIView):
             )
 
         _MIN_AGE = 13
-        # Compute the calendar date on which the user turns _MIN_AGE today.
-        # Using replace(year=...) correctly handles leap-year birthdays.
         try:
             age_cutoff = today.replace(year=today.year - _MIN_AGE)
         except ValueError:
-            # today is Feb 29 on a leap year and (today.year - _MIN_AGE) is not
-            # a leap year — fall back to Feb 28 of that year.
             age_cutoff = today.replace(year=today.year - _MIN_AGE, day=28)
 
         if dob > age_cutoff:
@@ -532,7 +502,6 @@ class FullSignupView(APIView):
                 {"error": f"You must be at least {_MIN_AGE} years old to register."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # ─────────────────────────────────────────────────────────────────────
 
         email      = data["email"].lower().strip()
         momo_number = str(data["momo_number"]).strip()
@@ -670,9 +639,7 @@ class FullSignupView(APIView):
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # PROFILE
-# ─────────────────────────────────────────────────────────────────────────────
 
 # Hard allowlist: ONLY these keys from request.data are ever passed to the serializer.
 ALLOWED_PROFILE_FIELDS = frozenset({
@@ -735,8 +702,6 @@ MOMO_GATED_FIELDS = frozenset({"momo_number", "momo_name", "momo_provider"})
 )
 class ProfileUpdateView(APIView):
     """
-    PATCH /accounts/profile/
-
     Security model:
     - Only ALLOWED_PROFILE_FIELDS are accepted — anything else is silently dropped.
     - Changes to ANY MoMo-identity field (number, name, provider) require OTP.
@@ -755,7 +720,7 @@ class ProfileUpdateView(APIView):
         profile = user.profile
         data = request.data
 
-        # ── 1. EMAIL UPDATE ───────────────────────────────────────────────────
+        # EMAIL UPDATE
         if "email" in data and data["email"] != user.email:
             new_email = data["email"].lower().strip()
             if not new_email or "@" not in new_email:
@@ -772,18 +737,16 @@ class ProfileUpdateView(APIView):
             user.save(update_fields=["email"])
             security_logger.info({"event": "email_changed", "user_id": user.id})
 
-        # ── 2. STRICT FIELD FILTER ────────────────────────────────────────────
+        # STRICT FIELD FILTER
         profile_data = {k: v for k, v in data.items() if k in ALLOWED_PROFILE_FIELDS}
 
-        # ── 3. MOMO IDENTITY GATE ─────────────────────────────────────────────
+        # MOMO IDENTITY GATE
         # Determine which MoMo-gated fields are actually being changed.
         gated_fields_being_changed = MOMO_GATED_FIELDS & set(profile_data.keys())
         requires_otp = False
 
         if gated_fields_being_changed:
             # Check whether the values are actually different from what's stored.
-            # We do this so a no-op update (same values re-submitted) doesn't
-            # force the user through an OTP they don't need.
             new_momo_number = profile_data.get("momo_number")
             new_momo_name = profile_data.get("momo_name")
             new_momo_provider = profile_data.get("momo_provider")
@@ -839,7 +802,7 @@ class ProfileUpdateView(APIView):
             otp_code = data.get("otp_code")
 
             if not otp_code:
-                # Step 1: No OTP supplied → send one and pause
+                # No OTP supplied? send one and pause
                 result = send_dawurobo_otp_async(otp_target)
                 if not result.get("success"):
                     return Response(
@@ -862,7 +825,7 @@ class ProfileUpdateView(APIView):
                     status=status.HTTP_202_ACCEPTED,
                 )
 
-            # Step 2: OTP supplied → verify it
+            # OTP supplied? verify it
             if not verify_and_invalidate_otp_sync(otp_target, otp_code):
                 security_logger.warning({
                     "event": "momo_change_otp_failed",
@@ -874,7 +837,7 @@ class ProfileUpdateView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # OTP verified — normalise the number if it changed
+            # OTP verified? normalize the number if it changed
             if momo_number_changed:
                 profile_data["momo_number"] = otp_target
 
@@ -884,9 +847,7 @@ class ProfileUpdateView(APIView):
                 "changed_fields": list(gated_fields_being_changed),
             })
 
-        # ── 4. INVALIDATE PAYSTACK RECIPIENT if any MoMo field changed ────────
-        # Must happen whether or not OTP was required (covers provider-only changes
-        # that were no-ops value-wise but still went through the gate).
+        # INVALIDATE PAYSTACK RECIPIENT if any MoMo field changed
         if MOMO_GATED_FIELDS & set(profile_data.keys()):
             profile_data["paystack_recipient_code"] = None
             security_logger.info({
@@ -895,7 +856,7 @@ class ProfileUpdateView(APIView):
                 "changed_fields": list(MOMO_GATED_FIELDS & set(profile_data.keys())),
             })
 
-        # ── 5. SAVE ───────────────────────────────────────────────────────────
+        # SAVE
         serializer = ProfileSerializer(profile, data=profile_data, partial=True)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -932,9 +893,7 @@ class ProfileUpdateView(APIView):
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # ME
-# ─────────────────────────────────────────────────────────────────────────────
 
 class MeViewResponseSerializer(rest_serializers.Serializer):
     user = rest_serializers.DictField(
@@ -968,9 +927,7 @@ class MeView(APIView):
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # SAVINGS GROUPS
-# ─────────────────────────────────────────────────────────────────────────────
 
 class CreateSavingsGroupView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1016,53 +973,6 @@ class MyJoinedGroupsListView(generics.ListAPIView):
         return SavingsGroup.objects.filter(
             memberships__user=self.request.user
         ).select_related("admin__profile").distinct()
-
-
-# @extend_schema(
-#     parameters=[
-#         OpenApiParameter(
-#             name="public_id",
-#             type=str,
-#             location=OpenApiParameter.PATH,
-#             description="The public_id of the savings group (or legacy numeric id).",
-#             required=True,
-#         ),
-#     ],
-#     description="Retrieves the details of a single savings group.",
-#     tags=["Savings Groups"],
-#     responses={
-#         200: SavingsGroupSerializer,
-#         403: {"description": "You are not a member of this group."},
-#         404: {"description": "Group not found."},
-#     },
-# )
-# class GroupDetailView(generics.RetrieveAPIView):
-#     serializer_class = SavingsGroupSerializer
-#     permission_classes = [IsAuthenticated]
-#     lookup_field = "public_id"
-
-#     def get_queryset(self):
-#         return SavingsGroup.objects.filter(
-#             memberships__user=self.request.user
-#         ).select_related("admin__profile")
-
-#     def get_object(self):
-#         queryset = self.get_queryset()
-#         lookup_value = self.kwargs["public_id"]
-
-#         obj = queryset.filter(public_id=lookup_value).first()
-#         if obj is not None:
-#             self.check_object_permissions(self.request, obj)
-#             return obj
-
-#         if str(lookup_value).isdigit():
-#             obj = queryset.filter(id=int(lookup_value)).first()
-#             if obj is not None:
-#                 self.check_object_permissions(self.request, obj)
-#                 return obj
-
-#         from rest_framework.exceptions import NotFound
-#         raise NotFound({"detail": "No SavingsGroup matches the given query."})
 
 
 @extend_schema(
@@ -1286,164 +1196,6 @@ class GroupRequestsListView(generics.ListAPIView):
         ).select_related("user__profile", "group")
 
 
-# @extend_schema(
-#     request=GroupJoinActionSerializer,
-#     responses={200: {"description": "Request handled successfully."}},
-#     description="Group Admin approves or rejects a pending join request.",
-#     tags=["Savings Groups"],
-# )
-# class GroupRequestActionView(APIView):
-#     permission_classes = [IsAuthenticated, IsGroupAdmin]
-
-#     @transaction.atomic
-#     def post(self, request, pk):
-#         try:
-#             request_obj = GroupJoinRequest.objects.select_for_update(
-#                 of=("self",)
-#             ).select_related("group__admin", "user__profile").get(pk=pk)
-#         except GroupJoinRequest.DoesNotExist:
-#             return Response(
-#                 {"error": "Join request not found."}, status=status.HTTP_404_NOT_FOUND
-#             )
-
-#         if request_obj.group.admin != request.user:
-#             return Response(
-#                 {"detail": "You are not authorized to handle this request."},
-#                 status=status.HTTP_403_FORBIDDEN,
-#             )
-
-#         if request_obj.status != "pending":
-#             return Response(
-#                 {"error": f"Request is already {request_obj.status}."},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         serializer = GroupJoinActionSerializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-#         action = serializer.validated_data["action"]
-
-#         group = SavingsGroup.objects.select_for_update().get(id=request_obj.group.id)
-
-#         if action == "approve":
-#             if group.current_members >= group.expected_members:
-#                 return Response(
-#                     {"error": "Cannot approve. Group is already full."},
-#                     status=status.HTTP_400_BAD_REQUEST,
-#                 )
-
-#             try:
-#                 GroupMembership.objects.create(user=request_obj.user, group=group)
-#                 group.current_members += 1
-#                 group.save(update_fields=["current_members"])
-
-#                 request_obj.status = "approved"
-#                 request_obj.handled_by = request.user
-#                 request_obj.handled_at = timezone.now()
-#                 request_obj.save(update_fields=["status", "handled_by", "handled_at"])
-
-#                 transaction.on_commit(
-#                     lambda: NotificationService.notify_join_approved(request_obj)
-#                 )
-#                 transaction.on_commit(
-#                     lambda: NotificationService.notify_new_member(
-#                         request.user, request_obj.user, group
-#                     )
-#                 )
-#                 from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
-#                 _new_user_name = request_obj.user.profile.full_name
-#                 _gid = group.id
-#                 transaction.on_commit(
-#                     lambda: send_telegram_new_member.delay(_gid, _new_user_name)
-#                 )
-
-#                 # If this approval also activated the group, fire the activated message too.
-#                 # (is_activating is already computed in the existing code — reuse it)
-#                 if is_activating:
-#                     transaction.on_commit(
-#                         lambda: send_telegram_group_activated.delay(_gid)
-#                     )
-
-#                 message = "User approved and added to the group."
-#                 is_activating = False
-
-#                 if group.current_members >= group.expected_members and not group.start_date:
-#                     is_activating = True
-#                     group.start_date = timezone.now().date()
-#                     group.save(update_fields=["start_date"])
-#                     PayoutOrder.objects.filter(group=group).delete()
-#                     memberships = GroupMembership.objects.filter(
-#                         group=group
-#                     ).order_by("joined_at")
-#                     PayoutOrder.objects.bulk_create([
-#                         PayoutOrder(group=group, membership=m, position=idx)
-#                         for idx, m in enumerate(memberships, start=1)
-#                     ])
-#                     message += " Group is now full and payout cycles have been initialized."
-#                     transaction.on_commit(
-#                         lambda: NotificationService.notify_group_activated(group)
-#                     )
-
-#                 transaction.on_commit(lambda: finance_logger.info({
-#                     "event": "group_join_approved",
-#                     "admin_id": request.user.id,
-#                     "target_user_id": request_obj.user.id,
-#                     "group_id": group.id,
-#                     "request_id": getattr(request, "request_id", None),
-#                 }))
-
-#                 if is_activating:
-#                     transaction.on_commit(lambda: finance_logger.info({
-#                         "event": "group_activated",
-#                         "group_id": group.id,
-#                         "start_date": str(group.start_date),
-#                     }))
-
-#                 transaction.on_commit(
-#                     lambda: send_group_join_response_email_async.delay(pk, "approved")
-#                 )
-
-#                 # Bot notifications
-#                 from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
-#                 _new_user_name = request_obj.user.profile.full_name
-#                 _gid = group.id
-#                 _is_activating = is_activating  # capture locally before leaving scope
-#                 transaction.on_commit(
-#                     lambda: send_telegram_new_member.delay(_gid, _new_user_name)
-#                 )
-#                 if _is_activating:
-#                     transaction.on_commit(
-#                         lambda: send_telegram_group_activated.delay(_gid)
-#                     )
-
-#             except IntegrityError:
-#                 return Response(
-#                     {"error": "User is already a member or a conflict occurred."},
-#                     status=status.HTTP_400_BAD_REQUEST,
-#                 )
-
-#         elif action == "reject":
-#             request_obj.status = "rejected"
-#             request_obj.handled_by = request.user
-#             request_obj.handled_at = timezone.now()
-#             request_obj.save(update_fields=["status", "handled_by", "handled_at"])
-
-#             transaction.on_commit(
-#                 lambda: NotificationService.notify_join_rejected(request_obj)
-#             )
-#             transaction.on_commit(lambda: finance_logger.info({
-#                 "event": "group_join_rejected",
-#                 "admin_id": request.user.id,
-#                 "target_user_id": request_obj.user.id,
-#                 "group_id": group.id,
-#             }))
-#             transaction.on_commit(
-#                 lambda: send_group_join_response_email_async.delay(pk, "rejected")
-#             )
-#             message = "User request has been rejected."
-
-#         return Response({"message": message}, status=status.HTTP_200_OK)
-
-
 @extend_schema(
     request=GroupJoinActionSerializer,
     responses={200: {"description": "Request handled successfully."}},
@@ -1510,7 +1262,7 @@ class GroupRequestActionView(APIView):
 
                 message = "User approved and added to the group."
 
-                # ── Determine activation BEFORE any lambdas that read it ──────
+                # Determine activation BEFORE any lambdas that read it
                 is_activating = (
                     group.current_members >= group.expected_members
                     and not group.start_date
@@ -1532,11 +1284,11 @@ class GroupRequestActionView(APIView):
                         lambda: NotificationService.notify_group_activated(group)
                     )
 
-                # ── Bot notifications (single block, after is_activating is set) ──
+                # Bot notifications
                 from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
                 _new_user_name = request_obj.user.profile.full_name
                 _gid = group.id
-                _is_activating = is_activating  # capture for lambda closure
+                _is_activating = is_activating
 
                 transaction.on_commit(
                     lambda: send_telegram_new_member.delay(_gid, _new_user_name)
@@ -1593,9 +1345,7 @@ class GroupRequestActionView(APIView):
 
         return Response({"message": message}, status=status.HTTP_200_OK)
 
-# ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD
-# ─────────────────────────────────────────────────────────────────────────────
 
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1653,155 +1403,13 @@ class DashboardView(APIView):
         })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CONTRIBUTIONS
-# ─────────────────────────────────────────────────────────────────────────────
-
-# class ContributeView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     @extend_schema(
-#         description="Record a contribution for the current cycle in an active savings group.",
-#         tags=["Savings Groups"],
-#         request=None,
-#         responses={
-#             201: {"description": "Contribution recorded successfully"},
-#             400: {"description": "Insufficient funds or already contributed."},
-#             404: {"description": "Group not found or user not a member."},
-#         },
-#     )
-#     @idempotent_request
-#     @method_decorator(ratelimit(key="user", rate="5/m", method="POST", block=True))
-#     @transaction.atomic
-#     def post(self, request, group_id):
-#         if not request.user.is_verified:
-#             return Response(
-#                 {"error": "You must complete KYC/Verification to contribute."},
-#                 status=status.HTTP_403_FORBIDDEN,
-#             )
-
-#         try:
-#             group = SavingsGroup.objects.select_for_update().get(
-#                 id=group_id, status="active"
-#             )
-#             membership = GroupMembership.objects.select_for_update().get(
-#                 user=request.user, group=group
-#             )
-#         except SavingsGroup.DoesNotExist:
-#             return Response(
-#                 {"error": "Group not found or not active"}, status=status.HTTP_404_NOT_FOUND
-#             )
-#         except GroupMembership.DoesNotExist:
-#             return Response(
-#                 {"error": "You are not a member of this group"}, status=status.HTTP_404_NOT_FOUND
-#             )
-
-#         current_cycle = group.current_cycle_number
-#         contribution = None
-#         try:
-#             contribution = Contribution.objects.create(
-#                 membership=membership,
-#                 amount=group.contribution_amount,
-#                 cycle_number=current_cycle,
-#                 is_verified=False,
-#             )
-#         except IntegrityError:
-#             return Response(
-#                 {"error": "You have already contributed for this cycle"},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         try:
-#             LedgerService.transfer(
-#                 amount=group.contribution_amount,
-#                 transaction_type="contribution",
-#                 description=f"Contribution to {group.group_name} (Cycle {current_cycle})",
-#                 reference=f"CONTRIB-{uuid.uuid4().hex[:12]}",
-#                 from_user=request.user,
-#                 to_group=group,
-#                 actor=request.user,
-#                 request_id=getattr(request, "request_id", None),
-#                 related_group=group,
-#             )
-#         except (ValidationError, Exception) as e:
-#             contribution.delete()
-#             finance_logger.error(
-#                 f"Ledger transfer failed for contribution {contribution.id if contribution else None}: {e}"
-#             )
-#             if "Insufficient wallet balance" in str(e):
-#                 return Response(
-#                     {"error": "Insufficient wallet balance for this contribution."},
-#                     status=status.HTTP_400_BAD_REQUEST,
-#                 )
-#             return Response(
-#                 {"error": "Failed to process contribution. Please try again."},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         contribution.is_verified = True
-#         contribution.save(update_fields=["is_verified"])
-
-#         wallet = Wallet.objects.get(user=request.user)
-#         wallet.refresh_from_db()
-
-#         finance_logger.info({
-#             "event": "group_contribution_recorded",
-#             "actor_id": request.user.id,
-#             "group_id": group.id,
-#             "amount": str(group.contribution_amount),
-#             "cycle": current_cycle,
-#             "new_balance": str(wallet.current_balance),
-#             "request_id": getattr(request, "request_id", None),
-#             "contribution_id": contribution.id,
-#         })
-
-#         return Response(
-#             {
-#                 "message": "Contribution recorded successfully",
-#                 "contribution_id": contribution.id,
-#                 "amount": contribution.amount,
-#                 "cycle": current_cycle,
-#                 "new_balance": wallet.current_balance,
-#             },
-#             status=status.HTTP_201_CREATED,
-#         )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CONTRIBUTIONS  (drop-in replacement for the ContributeView class)
-# ─────────────────────────────────────────────────────────────────────────────
-
 class ContributeView(APIView):
-    """
-    POST /accounts/groups/<group_id>/contribute/
-
-    <group_id> may be:
-      - A numeric string  (legacy, e.g. "42")
-      - A public_id string (e.g. "3437362048411916370")
-
-    Changes vs original:
-      1. Resolves the group by public_id OR numeric pk so the frontend can
-         pass whichever identifier it holds (previously only numeric pk worked).
-      2. Returns HTTP 409 with a clear, user-facing message when the member
-         has already contributed to the current cycle instead of a generic 400.
-      3. Guards against non-full groups: if the group has not yet reached
-         expected_members it is still "active" (admin-approved) but payout
-         cycles haven't started — we reject with a helpful message.
-    """
-
     permission_classes = [IsAuthenticated]
 
     def _resolve_group(self, group_id: str):
-        """
-        Return the SavingsGroup with a SELECT FOR UPDATE lock, or None.
-        Tries public_id first (the common case from the frontend), then
-        falls back to a numeric primary key for backward compatibility.
-        """
         qs = SavingsGroup.objects.select_for_update().filter(status="active")
 
-        # pure-digit strings could be either a numeric PK or a public_id
-        # (public_ids are 19 digits).  Try public_id first — it's the canonical
-        # identifier the frontend uses — then fall back to pk.
         group = qs.filter(public_id=group_id).first()
         if group is not None:
             return group
@@ -1809,7 +1417,7 @@ class ContributeView(APIView):
         if str(group_id).isdigit():
             group = qs.filter(pk=int(group_id)).first()
 
-        return group  # may still be None
+        return group
 
     @extend_schema(
         description="Record a contribution for the current cycle in an active savings group.",
@@ -1827,14 +1435,13 @@ class ContributeView(APIView):
     @method_decorator(ratelimit(key="user", rate="5/m", method="POST", block=True))
     @transaction.atomic
     def post(self, request, group_id):
-        # ── KYC gate ─────────────────────────────────────────────────────────
         if not request.user.is_verified:
             return Response(
                 {"error": "You must complete KYC/Verification to contribute."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # ── Resolve group (public_id or numeric pk) ───────────────────────────
+        #  Resolve group (public_id or numeric pk)
         group = self._resolve_group(str(group_id))
         if group is None:
             return Response(
@@ -1842,8 +1449,6 @@ class ContributeView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # ── Full-group gate ───────────────────────────────────────────────────
-        # Payout cycles only make sense once the group has filled up.
         if group.current_members < group.expected_members:
             return Response(
                 {
@@ -1856,7 +1461,7 @@ class ContributeView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # ── Membership check ──────────────────────────────────────────────────
+        #  Membership check
         try:
             membership = GroupMembership.objects.select_for_update().get(
                 user=request.user, group=group
@@ -1869,10 +1474,6 @@ class ContributeView(APIView):
 
         current_cycle = group.current_cycle_number
 
-        # ── Already-contributed guard (explicit check, fast path) ─────────────
-        # The unique_together constraint on (membership, cycle_number) provides
-        # a database-level guarantee, but checking here gives a friendlier error
-        # message before we attempt any wallet operations.
         if Contribution.objects.filter(
             membership=membership, cycle_number=current_cycle
         ).exists():
@@ -1888,7 +1489,7 @@ class ContributeView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # ── Create the contribution row ───────────────────────────────────────
+        #  Create the contribution row
         contribution = None
         try:
             contribution = Contribution.objects.create(
@@ -1898,7 +1499,6 @@ class ContributeView(APIView):
                 is_verified=False,
             )
         except IntegrityError:
-            # Race: another request slipped in between the check and the insert.
             return Response(
                 {
                     "error": (
@@ -1911,7 +1511,7 @@ class ContributeView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # ── Debit wallet via ledger ───────────────────────────────────────────
+        #  Debit wallet via ledger
         try:
             LedgerService.transfer(
                 amount=group.contribution_amount,
@@ -1975,9 +1575,7 @@ class ContributeView(APIView):
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # SAVINGS GOALS
-# ─────────────────────────────────────────────────────────────────────────────
 
 class CreateSavingsGoalView(APIView):
     permission_classes = [IsAuthenticated]
@@ -2252,9 +1850,7 @@ class GoalDetailView(RetrieveUpdateDestroyAPIView):
         serializer.save()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # STATS
-# ─────────────────────────────────────────────────────────────────────────────
 
 class GroupsStatsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -2548,9 +2144,7 @@ class JoinRequestsStatsView(APIView):
         })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # NOTIFICATIONS
-# ─────────────────────────────────────────────────────────────────────────────
 
 class NotificationListView(APIView):
     permission_classes = [IsAuthenticated]
@@ -2643,9 +2237,7 @@ class NotificationClearAllView(APIView):
         return Response({"success": True, "deleted_count": count})
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # ACTIVITY & SCHEDULED CONTRIBUTIONS
-# ─────────────────────────────────────────────────────────────────────────────
 
 class RecentActivityView(APIView):
     permission_classes = [IsAuthenticated]
@@ -2763,10 +2355,7 @@ class ScheduledContributionsView(APIView):
         })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # INVITE LINKS
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 class GroupInviteLinkView(APIView):
     permission_classes = [IsAuthenticated]
@@ -2855,78 +2444,6 @@ class GroupInviteLinkView(APIView):
             "message": "Invite link regenerated. Previous links are now invalid.",
         })
 
-# class GroupInviteLinkView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def _get_group(self, group_id_str: str):
-#         from rest_framework.exceptions import NotFound
-#         group = SavingsGroup.objects.filter(public_id=group_id_str).first()
-#         if group:
-#             return group
-#         if str(group_id_str).isdigit():
-#             group = SavingsGroup.objects.filter(id=int(group_id_str)).first()
-#             if group:
-#                 return group
-#         raise NotFound({"error": "Group not found."})
-
-#     def _resolve_group_and_check_access(self, request, group_id):
-#         group = self._get_group(str(group_id))
-#         is_admin = group.admin_id == request.user.id
-#         is_member = GroupMembership.objects.filter(
-#             user=request.user, group=group
-#         ).exists()
-#         if not is_admin and not is_member:
-#             return None, Response(
-#                 {"error": "You must be a member of this group."},
-#                 status=status.HTTP_403_FORBIDDEN,
-#             )
-#         return group, None
-
-#     def get(self, request, group_id):
-#         group, err = self._resolve_group_and_check_access(request, group_id)
-#         if err:
-#             return err
-#         invite, _ = GroupInviteLink.objects.get_or_create(
-#             group=group,
-#             defaults={"created_by": request.user, "is_active": True},
-#         )
-#         frontend_url = getattr(settings, "FRONTEND_URL", settings.SITE_URL)
-#         return Response({
-#             "token": invite.token,
-#             "invite_url": f"{frontend_url}/invite/{invite.token}",
-#             "is_active": invite.is_active,
-#             "click_count": invite.click_count,
-#             "created_at": invite.created_at.isoformat(),
-#         })
-
-#     def post(self, request, group_id):
-#         import secrets as _secrets
-#         group = self._get_group(str(group_id))
-#         if group.admin_id != request.user.id:
-#             return Response(
-#                 {"error": "Group not found or you are not the admin."},
-#                 status=status.HTTP_403_FORBIDDEN,
-#             )
-#         invite, _ = GroupInviteLink.objects.get_or_create(
-#             group=group, defaults={"created_by": request.user}
-#         )
-#         invite.token = _secrets.token_urlsafe(32)
-#         invite.is_active = True
-#         invite.save(update_fields=["token", "is_active", "updated_at"])
-
-#         frontend_url = getattr(settings, "FRONTEND_URL", settings.SITE_URL)
-#         finance_logger.info({
-#             "event": "invite_link_regenerated",
-#             "admin_id": request.user.id,
-#             "group_id": group.id,
-#         })
-#         return Response({
-#             "token": invite.token,
-#             "invite_url": f"{frontend_url}/invite/{invite.token}",
-#             "message": "Invite link regenerated. Previous links are now invalid.",
-#         })
-
-
 class InvitePreviewView(APIView):
     permission_classes = [AllowAny]
 
@@ -2963,147 +2480,6 @@ class InvitePreviewView(APIView):
             "spots_remaining": spots_remaining,
             "is_full": spots_remaining == 0,
         })
-
-
-# class InviteAcceptView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     @transaction.atomic
-#     def post(self, request, token):
-#         try:
-#             invite = GroupInviteLink.objects.select_related(
-#                 "group__admin__profile"
-#             ).get(token=token, is_active=True)
-#         except GroupInviteLink.DoesNotExist:
-#             return Response(
-#                 {"error": "This invite link is invalid or has expired."},
-#                 status=status.HTTP_404_NOT_FOUND,
-#             )
-
-#         group = SavingsGroup.objects.select_for_update().get(pk=invite.group_id)
-#         user = request.user
-
-#         if group.admin_id == user.id:
-#             return Response({
-#                 "already_member": True,
-#                 "message": "You are the admin of this group.",
-#                 "group_public_id": group.public_id,
-#                 "group_id": group.id,
-#                 "group_name": group.group_name,
-#             }, status=status.HTTP_200_OK)
-
-#         if GroupMembership.objects.filter(user=user, group=group).exists():
-#             return Response({
-#                 "already_member": True,
-#                 "message": "You are already a member of this group.",
-#                 "group_public_id": group.public_id,
-#                 "group_id": group.id,
-#                 "group_name": group.group_name,
-#             }, status=status.HTTP_200_OK)
-
-#         if group.current_members >= group.expected_members:
-#             return Response(
-#                 {"error": "Sorry, this group is already full."},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         if group.status not in ("pending", "active"):
-#             return Response(
-#                 {"error": "This group is not currently accepting new members."},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         try:
-#             GroupMembership.objects.create(user=user, group=group)
-#         except IntegrityError:
-#             return Response({
-#                 "already_member": True,
-#                 "message": "You are already a member of this group.",
-#                 "group_public_id": group.public_id,
-#                 "group_id": group.id,
-#                 "group_name": group.group_name,
-#             }, status=status.HTTP_200_OK)
-
-#         group.current_members += 1
-#         group.save(update_fields=["current_members"])
-
-#         GroupJoinRequest.objects.filter(
-#             user=user, group=group, status="pending"
-#         ).update(
-#             status="approved",
-#             handled_at=timezone.now(),
-#             handled_by=group.admin,
-#         )
-
-#         _group = group
-#         _user = user
-
-#         def _notify():
-#             try:
-#                 NotificationService._create(
-#                     user=_user,
-#                     notification_type="join_approved",
-#                     title="You joined via invite! 🎉",
-#                     message=(
-#                         f'You\'ve been added to "{_group.group_name}" '
-#                         "via an invite link. Welcome aboard!"
-#                     ),
-#                     related_group=_group,
-#                     action_url="Groups",
-#                     metadata={
-#                         "group_id": _group.id,
-#                         "group_name": _group.group_name,
-#                         "via_invite_link": True,
-#                     },
-#                 )
-#                 NotificationService.notify_new_member(_group.admin, _user, _group)
-#             except Exception as exc:
-#                 finance_logger.error(f"[InviteAcceptView] Notification error: {exc}")
-
-#         transaction.on_commit(_notify)
-#         from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
-#         _inv_user_name = user.profile.full_name
-#         _inv_gid = group.id
-#         transaction.on_commit(
-#             lambda: send_telegram_new_member.delay(_inv_gid, _inv_user_name)
-#         )
-#         if is_activating:
-#             transaction.on_commit(
-#                 lambda: send_telegram_group_activated.delay(_inv_gid)
-#             )
-
-#         is_activating = (
-#             group.current_members >= group.expected_members and not group.start_date
-#         )
-
-#         if is_activating:
-#             group.start_date = timezone.now().date()
-#             group.save(update_fields=["start_date"])
-#             PayoutOrder.objects.filter(group=group).delete()
-#             memberships = GroupMembership.objects.filter(group=group).order_by("joined_at")
-#             PayoutOrder.objects.bulk_create([
-#                 PayoutOrder(group=group, membership=m, position=idx)
-#                 for idx, m in enumerate(memberships, start=1)
-#             ])
-#             transaction.on_commit(
-#                 lambda: NotificationService.notify_group_activated(_group)
-#             )
-
-#         finance_logger.info({
-#             "event": "invite_link_auto_join",
-#             "user_id": user.id,
-#             "group_id": group.id,
-#             "group_activated": is_activating,
-#             "request_id": getattr(request, "request_id", None),
-#         })
-
-#         return Response({
-#             "message": f"Welcome to {group.group_name}! You have been added as a member.",
-#             "already_member": False,
-#             "group_public_id": group.public_id,
-#             "group_id": group.id,
-#             "group_name": group.group_name,
-#         }, status=status.HTTP_201_CREATED)
 
 
 class InviteAcceptView(APIView):
@@ -3176,7 +2552,7 @@ class InviteAcceptView(APIView):
             handled_by=group.admin,
         )
 
-        # ── Determine activation BEFORE any lambdas that read it ──────────────
+        #  Determine activation BEFORE any lambdas that read it
         is_activating = (
             group.current_members >= group.expected_members and not group.start_date
         )
@@ -3194,7 +2570,7 @@ class InviteAcceptView(APIView):
                 lambda: NotificationService.notify_group_activated(group)
             )
 
-        # ── In-app join notification ──────────────────────────────────────────
+        #  In-app join notification
         _group = group
         _user = user
 
@@ -3222,7 +2598,7 @@ class InviteAcceptView(APIView):
 
         transaction.on_commit(_notify)
 
-        # ── Bot notifications (after is_activating is set) ────────────────────
+        #  Bot notifications (after is_activating is set)
         from .bot_tasks import send_telegram_new_member, send_telegram_group_activated
         _inv_user_name = user.profile.full_name
         _inv_gid = group.id
@@ -3252,9 +2628,7 @@ class InviteAcceptView(APIView):
             "group_name": group.group_name,
         }, status=status.HTTP_201_CREATED)
 
-# ─────────────────────────────────────────────────────────────────────────────
 # AI CHAT
-# ─────────────────────────────────────────────────────────────────────────────
 
 INJECTION_PATTERNS = [
     re.compile(r"ignore\s+(all\s+)?(previous|prior|above)\s+instructions?", re.I),
@@ -3287,15 +2661,15 @@ MAX_CHARS_PER_MESSAGE = 2000
 MAX_MESSAGES = 30
 MAX_TOTAL_CHARS = 12_000
 
-SNAPPX_SYSTEM_PROMPT = """You are SnappX AI — a friendly financial assistant for Ghanaians using the SnappX susu savings app.
+SNAPPX_SYSTEM_PROMPT = """You are SnappX AI - a friendly financial assistant for Ghanaians using the SnappX susu savings app.
 
-Scope — you ONLY help with:
+Scope - you ONLY help with:
 - Budgeting, saving, and expense management
 - Susu/group savings concepts and SnappX features
 - Personal savings goals
 - General Ghanaian financial literacy (MoMo, treasury bills, fixed deposits)
 
-Hard limits — you MUST NEVER:
+Hard limits - you MUST NEVER:
 - Reveal, guess, or discuss any user's personal data, MoMo number, email, or balance
 - Provide specific investment guarantees
 - Execute or describe technical operations (SQL, code, APIs, system administration)
@@ -3465,9 +2839,7 @@ class AIChatView(APIView):
         return response
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CRON TASK TRIGGERS
-# ─────────────────────────────────────────────────────────────────────────────
 
 @csrf_exempt
 @ratelimit(key="ip", rate="6/m", block=True)

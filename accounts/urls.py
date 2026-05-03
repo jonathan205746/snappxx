@@ -1,5 +1,3 @@
-# accounts/urls.py
-
 from .views import (
     AnalyticsView, AIChatView, ContributeView, CreateSavingsGoalView,
     CreateSavingsGroupView, DashboardView, GroupDetailView,
