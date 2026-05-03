@@ -45,7 +45,7 @@ def idempotent_request(view_func):
                 hashable_data,
                 sort_keys=True,
                 cls=DjangoJSONEncoder,
-                default=str  # extra safety net
+                default=str
             )
             raw_string = f"{request.path}|{payload_json}"
             request_hash = sha256(raw_string.encode()).hexdigest()
