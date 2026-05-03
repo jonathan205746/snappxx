@@ -9,7 +9,6 @@
 - [About](#about)
   - [Built With](#built-with)
   - [Key Features](#key-features)
-  - [Live Demo](#live-demo)
 - [Frontend](#frontend)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
