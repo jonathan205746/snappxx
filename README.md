@@ -280,19 +280,6 @@ The API will be available at [http://localhost:8000](http://localhost:8000)
 |--------|----------|-------------|
 | POST | `/api/accounts/ai/chat/` | Streaming AI savings assistant (SSE) |
 
-### Telegram Bot Integration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/accounts/groups/<group_id>/bot/generate-code/` | Generate a bot link code |
-| POST | `/api/accounts/groups/bot/link/` | Link group to a bot platform |
-| DELETE | `/api/accounts/groups/<group_id>/bot/unlink/` | Unlink a bot |
-| GET  | `/api/accounts/groups/bot/linked/` | List linked groups |
-| GET  | `/api/accounts/groups/bot/my-groups/` | Admin groups with bot status |
-| POST | `/api/accounts/bot/telegram/webhook/` | Telegram update receiver |
-| POST | `/api/accounts/bot/telegram/set-webhook/` | Register webhook (staff only) |
-| GET  | `/api/accounts/bot/telegram/health/` | Bot health check (staff only) |
-
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
@@ -323,7 +310,6 @@ Tests use `--reuse-db` for speed. Settings module is configured via `pytest.ini`
 
 ## 🔭 Future Features <a name="future-features"></a>
 
-- [ ] WhatsApp bot integration
 - [ ] In-app transaction dispute resolution
 - [ ] Group admin dashboard with cycle analytics
 - [ ] Multi-currency wallet support
