@@ -2,7 +2,7 @@
 
 <a name="readme-top"></a>
 
-> The Django REST API powering Snappx, a Ghanaian susu savings platform. Handles group savings cycles, MoMo payouts, wallet ledgering, OTP verification, AI chat, Telegram bot integration, and scheduled financial tasks.
+> The Django REST API powering Snappx, a Ghanaian susu savings platform. Handles group savings cycles, MoMo payouts, wallet ledgering, OTP verification, AI chat, and scheduled financial tasks.
 
 ## 📗 Table of Contents
 
